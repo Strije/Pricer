@@ -45,6 +45,9 @@ _bug = '"name": str(offer.get("name") or offer.get("source_name") or ""),'
 assert _bug in body, "исправление offer->variant больше не применимо, проверьте main.py"
 body = body.replace(_bug, '"name": str(variant.get("name") or variant.get("source_name") or order_item.get("name") or ""),')
 body = body.replace("if not self.markup_toggle.isChecked():", "if not self.markup_enabled:")
+_c = 'comment = str(order.get("comment") or "")'
+assert body.count(_c) == 1, "gen_engine: строка комментария к отправке не найдена"
+body = body.replace(_c, 'comment = supplier_comment(order_id, order.get("comment"))')
 out = f'''"""Движок поиска для заказа из файла, вынесенный из main.py (SkitchenApp) без Qt.
 
 Методы перенесены дословно из десктопа (версия 1.0.3), чтобы поведение не разошлось:
@@ -104,6 +107,17 @@ from url_csv_provider import UrlCsvProvider
 def default_settings():
 {default_body}
     return default
+
+
+def supplier_comment(order_id, comment):
+    """Комментарий поставщику с меткой нашего заказа (ORD-…) в начале: по ней статус из личного
+    кабинета находит позицию однозначно (как метки в 1С); в начале — чтобы пережить обрезку длины
+    (у Росско 50 знаков). Текст оператора сохраняется после метки."""
+    comment = str(comment or "").strip()
+    label = str(order_id or "").strip()
+    if not label or label in comment:
+        return comment
+    return f"{{label}} {{comment}}".strip()
 
 
 class _ProgressList(list):

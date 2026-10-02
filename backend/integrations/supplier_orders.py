@@ -69,7 +69,8 @@ def _split_partial(rows_out, order, date, article, brand, name, ordered, cancell
         rows_out.append(_row(order, date, article, brand, name, cancelled, cancel_status, True, comment))
         ordered -= cancelled
         cancelled = 0
-    rows_out.append(_row(order, date, article, brand, name, ordered, status, cancelled >= ordered > 0, comment))
+    fully = cancelled >= ordered > 0
+    rows_out.append(_row(order, date, article, brand, name, ordered, cancel_status if fully else status, fully, comment))
 
 
 # ---------- Армтек ----------
@@ -91,8 +92,6 @@ def armtek_orders(provider, since):
         date = _date(_s(p, "ORDER_DATE"), "%Y%m%d%H%M%S", "%Y%m%d")
         _split_partial(rows, _s(p, "ORDER"), date, _s(p, "PIN"), _s(p, "BRAND"), _s(p, "NAME"), ordered, rejected,
                        status, "отклонено: " + _s(p, "ABGRU_TXT"), _s(p, "NOTE"))
-        if rejected >= ordered > 0:
-            rows[-1]["status"] = "отклонено: " + _s(p, "ABGRU_TXT")
     return rows
 
 
@@ -150,6 +149,8 @@ def rossko_orders(provider, since):
             for parts in _children(order, "parts"):
                 for part in _children(parts, "part"):
                     code = _text(part, "status")
+                    if _num(_text(part, "count")) <= 0:
+                        continue  # служебный остаток строки (count 0, напр. статус 34)
                     rows.append(_row(number, date, _text(part, "partnumber"), _text(part, "brand"), _text(part, "name"),
                                      _num(_text(part, "count")), ROSSKO_STATUSES.get(code, f"статус {code}"),
                                      code in ROSSKO_REFUSED, _text(part, "comment")))

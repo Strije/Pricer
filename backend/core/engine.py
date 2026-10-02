@@ -108,6 +108,17 @@ def default_settings():
     return default
 
 
+def supplier_comment(order_id, comment):
+    """Комментарий поставщику с меткой нашего заказа (ORD-…) в начале: по ней статус из личного
+    кабинета находит позицию однозначно (как метки в 1С); в начале — чтобы пережить обрезку длины
+    (у Росско 50 знаков). Текст оператора сохраняется после метки."""
+    comment = str(comment or "").strip()
+    label = str(order_id or "").strip()
+    if not label or label in comment:
+        return comment
+    return f"{label} {comment}".strip()
+
+
 class _ProgressList(list):
     """Список итогов по поставщикам, который сообщает о каждом новом итоге (для прогресса в вебе)."""
 
@@ -2048,7 +2059,7 @@ class ProcurementEngine:
         skipped_count = 0
         not_ready_count = 0
         provider_results = order.get("provider_results") or []
-        comment = str(order.get("comment") or "")
+        comment = supplier_comment(order_id, order.get("comment"))
         order_verified = str(order.get("verification_status") or "") == "valid"
         self._detail_log(
             "order_submit_start",

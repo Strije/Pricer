@@ -31,19 +31,25 @@ SUBMIT_TO_STATUS = {"submitted": "submitted", "unknown": "unknown", "failed": "f
 
 # Тексты статусов поставщиков -> наш код. Порядок важен: сначала более конкретные.
 _KEYWORDS = [
-    ("refused", ("отказ", "нет в налич", "снят", "аннул", "отмен", "не поставл", "недопостав")),
+    ("refused", ("отказ", "нет в налич", "снят", "аннул", "отмен", "не поставл", "недопостав", "не выполнен")),
     ("returned", ("возврат", "возвращ")),
-    ("issued", ("выдан", "получен клиент", "отгружен клиент")),
+    # Тексты пишет поставщик: «выдан», «получен клиентом» — это мы получили товар, т.е. он у нас
+    # на складе; «выдан клиенту» в нашем смысле отмечает только оператор.
+    ("arrived", ("выдан", "получен клиент", "получен", "полностью поставлен", "поставлен")),
     # «ждет подтверждения» (Росско) — поставщик заказ видит, но ещё не подтвердил
     ("submitted", ("ждет подтвержд", "ждёт подтвержд", "ожидает подтвержд")),
     # «ожидаем поступление», «ожидаем товар на складе» (Росско) — ещё не пришло
     ("confirmed", ("ожидаем", "ожидается")),
     # «в пути на склад» — ещё в пути: явные признаки пути проверяем раньше «на склад»
     ("in_transit", ("в пути", "в доставке", "передан в доставку")),
+    # Работа на складе поставщика (АБС «Поступил в работу», «Собран на складе заказа»,
+    # Фаворит «В сборке», Профит-Лига «Зарезервирован к отгрузке») — ещё не у нас.
+    ("confirmed", ("в работ", "на складе заказа", "упакован", "собран", "собира", "сборк", "комплект",
+                   "резерв", "к отгрузке", "к транзиту", "выкуплен")),
     ("arrived", ("на склад", "пришл", "пришёл", "пришел", "поступ", "прибыл", "готов к выдаче", "к выдаче")),
     ("in_transit", ("отгружен", "отправлен")),
     ("in_transit", ("задерж",)),  # «Задерживается» (ABCP) — ещё едет
-    ("confirmed", ("подтвержд", "принят", "в работе", "заказан", "обработ", "оформлен", "ожидает оплаты")),
+    ("confirmed", ("подтвержд", "принят", "заказан", "обработ", "оформлен", "ожидает оплаты")),
 ]
 
 
@@ -319,7 +325,8 @@ def match_rows(lines, rows):
 def _status_from(alive, refused):
     if not alive:
         texts = list(dict.fromkeys(str(row.get("status") or "").strip() for row, _ in refused))
-        return "refused", "; ".join(t for t in texts if t) or "отказ поставщика"
+        code = "returned" if all(normalize_status(t) == "returned" for t in texts if t) and any(texts) else "refused"
+        return code, "; ".join(t for t in texts if t) or "отказ поставщика"
     texts = list(dict.fromkeys(str(row.get("status") or "").strip() for row, _ in alive))
     text = "; ".join(t for t in texts if t)
     code = ""
@@ -347,7 +354,7 @@ def apply_rows(session, organization_id, provider_name, rows):
         if line.id not in matched:
             continue
         code, text = _status_from(*matched[line.id])
-        if code == "refused" or _RANK.get(code, 0) >= _RANK.get(line.status, 0):
+        if code in ("refused", "returned") or _RANK.get(code, 0) >= _RANK.get(line.status, 0):
             if code != line.status or text[:500] != line.status_text:
                 add_event(session, line, code, text, source="supplier")
                 changed += 1

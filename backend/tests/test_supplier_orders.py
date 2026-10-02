@@ -289,3 +289,28 @@ def test_unknown_text_means_at_least_confirmed(org_session):
                                        ("отменен клиентом", "refused"), ("товар возвращен", "returned")])
 def test_rossko_texts(text, code):
     assert normalize_status(text) == code
+
+
+# Тексты статусов из реальной записи личных кабинетов (02.10.2026).
+@pytest.mark.parametrize("text,code", [
+    ("Получен клиентом", "arrived"), ("Возвращен", "returned"), ("Отменен", "refused"),
+    ("Перемещение резерва (наличие)", "confirmed"), ("Зарезервирован к отгрузке", "confirmed"),
+    ("Готов к отгрузке", "confirmed"), ("Отгружен", "in_transit"), ("Собран", "confirmed"),
+    ("В сборке", "confirmed"), ("Обработан", "confirmed"), ("Не выполнен", "refused"),
+    ("Позиция полностью поставлена", "arrived"), ("В работе", "confirmed"), ("На комплектации", "confirmed"),
+    ("Подтвержден", "confirmed"), ("В пути", "in_transit"), ("Готов к транзиту", "confirmed"),
+    ("Отменен (или отмена позиции)", "refused"), ("Заказан у поставщика", "confirmed"),
+    ("Поступил в работу", "confirmed"), ("Упакован на складе заказа", "confirmed"),
+    ("Собран на складе заказа", "confirmed"), ("Выкуплен", "confirmed"), ("Собирается", "confirmed"),
+    ("отгружено", "in_transit"), ("комплектуется", "confirmed"), ("отклонено: Снятие резервирования", "refused"),
+    ("Выдано", "arrived"), ("Готово к выдаче", "arrived"), ("Задерживается", "in_transit"),
+])
+def test_real_supplier_texts(text, code):
+    assert normalize_status(text) == code
+
+
+def test_returned_rows_are_returned(org_session):
+    session, org = org_session
+    line = _line(session, org, 0)
+    apply_rows(session, org, "Армтек", [_row("A", "OC90", 1, "товар возвращен", True)])
+    assert line.status == "returned"

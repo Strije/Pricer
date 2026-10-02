@@ -12,6 +12,8 @@
     PRICER_SECURE_COOKIES — 1 при работе по HTTPS.
     PRICER_REPLAY         — 1 или путь к записи .jsonl.gz: демонстрация без сети на записанных
                             ответах; организации без поставщиков получают тестовые настройки.
+    PRICER_STATUS_REFRESH_MINUTES — как часто сервер сам спрашивает статусы заказов у поставщиков
+                            (по умолчанию 30 минут, 0 — только по кнопке; в демо-режиме выключено).
 """
 import asyncio
 import datetime
@@ -326,6 +328,13 @@ def create_app(var_dir=None, database_url=None):
         cached = state["engines"].get(organization_id)
         if cached is not None:
             return cached
+        engine = build_engine(organization_id)
+        state["engines"][organization_id] = engine
+        return engine
+
+    def build_engine(organization_id):
+        """Новый движок организации (engine_for кэширует его; фоновой проверке статусов нужен свой,
+        чтобы не занимать блокировку поиска пользователей)."""
         from engine import PROVIDER_DISPLAY_NAMES, ProcurementEngine
 
         with Session() as session:
@@ -343,7 +352,6 @@ def create_app(var_dir=None, database_url=None):
         engine.order_store = order_service.DbOrderStore(Session, organization_id, redactor=redactor)
         engine.order_history = order_service.DbOrderHistory(Session, organization_id, redactor=redactor)
         engine.redactor = redactor
-        state["engines"][organization_id] = engine
         return engine
 
     for org_id, order_id in order_service.recover_interrupted_submits(Session):
@@ -1148,33 +1156,92 @@ def create_app(var_dir=None, database_url=None):
             session.commit()
             return lines_service.line_view(line)
 
+    def refresh_statuses(engine, organization_id):
+        """Статусы открытых позиций у всех поставщиков организации; отчёт по каждому."""
+        from engine import PROVIDER_DISPLAY_NAMES
+
+        replay_reset(engine)
+        report = []
+        for provider in engine.providers:
+            cls = type(provider).__name__
+            fetch = lines_service.fetcher_for(provider)
+            if not fetch:
+                continue
+            name = PROVIDER_DISPLAY_NAMES.get(cls, getattr(provider, "DISPLAY_NAME", cls))
+            with Session() as session:
+                try:
+                    changed = fetch(session, organization_id, provider, name)
+                    session.commit()
+                    report.append({"provider": name, "changed": changed})
+                except Exception as exc:
+                    session.rollback()
+                    report.append({"provider": name, "error": engine.redactor.text(str(exc))[:200]})
+        return report
+
     @app.post("/api/supplier-lines/refresh")
     def refresh_lines(user=Depends(current_user)):
         job = Job(None, user["organization_id"], kind="refresh")
+        sync_all_lines(user["organization_id"])
 
         def work(engine):
-            from engine import PROVIDER_DISPLAY_NAMES
-
-            replay_reset(engine)
-            report = []
-            for provider in engine.providers:
-                cls = type(provider).__name__
-                fetch = lines_service.fetcher_for(provider)
-                if not fetch:
-                    continue
-                name = PROVIDER_DISPLAY_NAMES.get(cls, getattr(provider, "DISPLAY_NAME", cls))
-                with Session() as session:
-                    try:
-                        changed = fetch(session, job.organization_id, provider, name)
-                        session.commit()
-                        report.append({"provider": name, "changed": changed})
-                    except Exception as exc:
-                        session.rollback()
-                        report.append({"provider": name, "error": engine.redactor.text(str(exc))[:200]})
-            job.push("done", {"providers": report})
+            job.push("done", {"providers": refresh_statuses(engine, job.organization_id)})
 
         start_job(job, work)
         return {"job_id": job.id}
+
+    @app.get("/api/notifications")
+    def notifications(after: int = -1, user=Depends(current_user)):
+        """Отказы и возвраты, о которых сообщил поставщик: для всплывающих уведомлений.
+
+        after — последний показанный id (браузер помнит его); при первом входе — отказы за 3 дня.
+        """
+        with Session() as session:
+            events = (session.query(db.SupplierLineEvent, db.SupplierLine)
+                      .join(db.SupplierLine, db.SupplierLineEvent.line_id == db.SupplierLine.id)
+                      .filter(db.SupplierLine.organization_id == user["organization_id"],
+                              db.SupplierLineEvent.source == "supplier",
+                              db.SupplierLineEvent.status.in_(("refused", "returned"))))
+            if after >= 0:
+                events = events.filter(db.SupplierLineEvent.id > after)
+            else:
+                events = events.filter(db.SupplierLineEvent.at >= db.utcnow() - datetime.timedelta(days=3))
+            events = events.order_by(db.SupplierLineEvent.id.desc()).limit(50).all()
+            last = session.query(db.SupplierLineEvent.id).join(db.SupplierLine).filter(
+                db.SupplierLine.organization_id == user["organization_id"]).order_by(db.SupplierLineEvent.id.desc()).first()
+            labels = {k: v[0] for k, v in lines_service.STATUSES.items()}
+            return {"last_id": max(after, last[0] if last else 0), "items": [{
+                "id": e.id, "at": e.at.isoformat(timespec="seconds"), "status": e.status,
+                "label": labels.get(e.status, e.status), "text": e.text, "line_id": line.id,
+                "order_id": line.order_id, "provider": line.provider, "brand": line.brand, "article": line.article,
+                "name": line.name, "quantity": line.quantity, "client": line.client_name,
+            } for e, line in reversed(events)]}
+
+    # Фоновая проверка статусов: отказ виден, даже если никто не нажимал «Обновить статусы».
+    refresh_minutes = float(os.environ.get("PRICER_STATUS_REFRESH_MINUTES", "0" if replay_mode else "30") or 0)
+    stop_background = threading.Event()
+    app.state.stop_background = stop_background
+    app.state.background_rounds = 0
+
+    def background_refresh():
+        while not stop_background.wait(refresh_minutes * 60):
+            app.state.background_rounds += 1
+            with Session() as session:
+                org_ids = [row[0] for row in session.query(db.SupplierLine.organization_id)
+                           .filter(db.SupplierLine.closed.is_(False)).distinct()]
+            for org_id in org_ids:
+                if stop_background.is_set():
+                    return
+                try:
+                    sync_all_lines(org_id)
+                    report = refresh_statuses(build_engine(org_id), org_id)
+                    changed = sum(r.get("changed", 0) for r in report)
+                    if changed:
+                        print(f"[pricer] статусы организации {org_id}: изменений {changed}")
+                except Exception as exc:  # фоновая проверка не должна ронять сервис
+                    print(f"[pricer] фоновая проверка статусов {org_id}: {type(exc).__name__}: {str(exc)[:200]}")
+
+    if refresh_minutes > 0:
+        threading.Thread(target=background_refresh, daemon=True, name="status-refresh").start()
 
     @app.get("/api/supplier-stats")
     def supplier_stats(days: int = 180, user=Depends(current_user)):

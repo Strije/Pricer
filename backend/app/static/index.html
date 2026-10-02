@@ -88,6 +88,13 @@
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
   .note { font-size: 12px; color: var(--muted); }
   @media (max-width: 640px) { main { padding: 12px 16px 32px; } #brand, #article { width: 100%; } form > * { flex: 1 1 140px; } }
+  #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px;
+            z-index: 50; max-width: min(420px, calc(100vw - 32px)); }
+  .toast { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--bad);
+           border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 13px; }
+  .toast .t-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; color: var(--bad); }
+  .toast .t-close { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 2px; }
+  .toast .t-actions { margin-top: 6px; display: flex; gap: 12px; }
 </style>
 </head>
 <body>
@@ -341,6 +348,7 @@
     <div class="cards" id="cards"></div>
   </section>
 </main>
+<div id="toasts" aria-live="polite"></div>
 <script>
 const $ = (id) => document.getElementById(id);
 const UNKNOWN_HOURS = 999999 * 24;
@@ -395,6 +403,7 @@ async function boot() {
     $("auth").classList.add("hidden"); $("app").classList.remove("hidden"); $("userbox").classList.remove("hidden");
     renderChips(me.providers, {});
     api("/api/cart").then(renderCartBadge).catch(() => {});
+    startNotifications(me.email);
     catalog = await api("/api/catalog");
     $("add-section").innerHTML = Object.entries(catalog).map(([k, v]) => `<option value="${k}">${esc(v.title)}</option>`).join("");
   } catch (e) { showAuth(); }
@@ -869,10 +878,52 @@ $("ln-refresh").onclick = async () => {
     const parts = (end.data.providers || []).map((p) => p.error ? `${p.provider}: ошибка` : `${p.provider}: изменений ${p.changed}`);
     $("ln-msg").className = "msg ok";
     $("ln-msg").textContent = parts.length ? parts.join(", ") : "Ни один подключённый поставщик пока не отдаёт статусы автоматически — меняйте статус вручную";
-    loadLines(); loadReliability();
+    loadLines(); loadReliability(); checkNotifications();
   } catch (err) { $("ln-msg").textContent = err.message; }
 };
 loadReliability();
+
+// ---------- уведомления об отказах поставщиков ----------
+// Сервер сам опрашивает поставщиков (раз в 30 минут); браузер раз в минуту спрашивает новые отказы.
+let notifyKey = "", notifyTimer = null, notifyLast = -1;
+function startNotifications(email) {
+  notifyKey = "pricer.notify." + email;
+  try { const v = localStorage.getItem(notifyKey); notifyLast = v == null ? -1 : Number(v); } catch (e) { notifyLast = -1; }
+  clearInterval(notifyTimer); checkNotifications(); notifyTimer = setInterval(checkNotifications, 60000);
+}
+async function checkNotifications() {
+  try {
+    const r = await api(`/api/notifications?after=${notifyLast}`);
+    r.items.slice(-5).forEach(showRefusal);
+    if (r.items.length > 5) showToast(`И ещё отказов: ${r.items.length - 5}`, "Все — на вкладке «Заказы поставщикам»", null);
+    notifyLast = r.last_id;
+    try { localStorage.setItem(notifyKey, String(notifyLast)); } catch (e) {}
+  } catch (e) {}
+}
+function showRefusal(n) {
+  const title = `${n.label[0].toUpperCase()}${n.label.slice(1)}: ${n.provider}`;
+  const body = `${n.brand} ${n.article} × ${n.quantity}${n.name ? " — " + n.name : ""}\nзаказ ${n.order_id}${n.client ? ", клиент " + n.client : ""}${n.text ? "\n" + n.text : ""}`;
+  showToast(title, body, n.line_id);
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    try { new Notification(title, {body, tag: "pricer-line-" + n.line_id}); } catch (e) {}
+  }
+}
+function showToast(title, body, lineId) {
+  const el = document.createElement("div");
+  el.className = "toast"; el.setAttribute("role", "status");
+  const askSystem = "Notification" in window && Notification.permission === "default";
+  el.innerHTML = `<div class="t-head"><span>${esc(title)}</span><button class="t-close" title="Закрыть">×</button></div>
+    <div style="white-space:pre-line">${esc(body)}</div>
+    <div class="t-actions">${lineId ? '<button class="link" data-open>Открыть позицию</button>' : ""}
+      ${askSystem ? '<button class="link" data-sys>Показывать и в фоне</button>' : ""}</div>`;
+  el.querySelector(".t-close").onclick = () => el.remove();
+  if (lineId) el.querySelector("[data-open]").onclick = () => {
+    document.querySelector('[data-tab="lines"]').click(); loadLines(); openLine(lineId); el.remove();
+  };
+  if (askSystem) el.querySelector("[data-sys]").onclick = (ev) => { Notification.requestPermission(); ev.target.remove(); };
+  $("toasts").appendChild(el);
+  while ($("toasts").children.length > 6) $("toasts").firstChild.remove();
+}
 
 // ---------- замена варианта позиции ----------
 async function showVariants(index) {

@@ -14,7 +14,7 @@ def test_normalize_supplier_status_texts():
     assert normalize_status("В пути на склад") == "in_transit"
     assert normalize_status("Пришло на склад") == "arrived"
     assert normalize_status("Готов к выдаче") == "arrived"
-    assert normalize_status("Выдан клиенту") == "issued"
+    assert normalize_status("Выдан клиенту") == "arrived"  # текст поставщика: товар у нас
     assert normalize_status("Заказ подтверждён") == "confirmed"
     assert normalize_status("что-то непонятное") == ""
 
@@ -127,3 +127,46 @@ def test_replace_variant_in_cart_order(app_factory):  # noqa: F811
     assert replaced["items"][0]["internal_offer_id"] == chosen["internal_offer_id"]
     assert client.post(f"/api/orders/{order['order_id']}/items/0/replace", headers=H,
                        json={"internal_offer_id": "fake"}).status_code == 404
+
+
+def test_refusal_notifications(submitted):
+    client, _, tradesoft, make_client = submitted
+    tradesoft.get_items_status = lambda ids: {"T-777": {"providerItemId": "T-777", "stateName": "Отказ поставщика"}}
+    job_events(client, client.post("/api/supplier-lines/refresh", headers=H).json()["job_id"])
+    first = client.get("/api/notifications").json()  # первый вход: отказы за 3 дня
+    refusal = next(n for n in first["items"] if n["provider"] == "Автоформула")
+    assert refusal["status"] == "refused" and refusal["text"] == "Отказ поставщика" and refusal["order_id"]
+    assert client.get("/api/notifications", params={"after": first["last_id"]}).json()["items"] == []
+    # ручная отметка оператора — не уведомление
+    line = next(r for r in client.get("/api/supplier-lines").json()["rows"] if r["provider"] == "Avtoto")
+    client.post(f"/api/supplier-lines/{line['id']}/status", headers=H, json={"status": "refused"})
+    assert client.get("/api/notifications", params={"after": first["last_id"]}).json()["items"] == []
+    other = register(make_client(), "notify-other@example.com", org="Чужие уведомления")
+    assert other.get("/api/notifications").json()["items"] == []
+
+
+def test_background_refresh_runs(tmp_path, monkeypatch, capsys):
+    """Фоновая проверка статусов идёт сама и не падает на организации без поставщиков."""
+    import time as time_module
+
+    from app import db as dbm
+    from app.server import create_app
+
+    monkeypatch.delenv("PRICER_REPLAY", raising=False)
+    monkeypatch.setenv("PRICER_STATUS_REFRESH_MINUTES", "0.001")  # ~0.06 с
+    app = create_app(var_dir=str(tmp_path))
+    with app.state.pricer["Session"]() as session:
+        org = dbm.Organization(name="bg", settings={})
+        session.add(org)
+        session.flush()
+        session.add(dbm.SupplierLine(organization_id=org.id, order_id="ORD-1", item_index=0, provider="X",
+                                     status="submitted"))
+        session.commit()
+    try:
+        deadline = time_module.time() + 10
+        while app.state.background_rounds < 3 and time_module.time() < deadline:
+            time_module.sleep(0.05)
+    finally:
+        app.state.stop_background.set()
+    assert app.state.background_rounds >= 3
+    assert "фоновая проверка статусов" not in capsys.readouterr().out  # без ошибок
