@@ -95,6 +95,82 @@
   .toast .t-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; color: var(--bad); }
   .toast .t-close { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 2px; }
   .toast .t-actions { margin-top: 6px; display: flex; gap: 12px; }
+  /* ---------- поиск и выдача ---------- */
+  form.searchbar { flex-wrap: nowrap; align-items: stretch; position: relative; }
+  form.searchbar #article { flex: 1 1 auto; width: auto; font-size: 16px; padding: 10px 12px; }
+  .kind-menu { position: absolute; left: 14px; right: 14px; top: calc(100% - 8px); z-index: 20; background: var(--panel);
+               border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 4px; }
+  .kind-menu button { display: block; width: 100%; text-align: left; background: none; color: var(--text); font-weight: 500; padding: 8px 10px; }
+  .kind-menu button.on, .kind-menu button:hover { background: var(--accent-soft); color: var(--accent); }
+  .brandbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0 0; }
+  .brand-choices { display: flex; gap: 6px; flex-wrap: wrap; flex-basis: 100%; }
+  .brand-choices button { padding: 6px 12px; }
+  .cards3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 6px 0 14px; }
+  .hl { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .hl-title { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .03em; }
+  .hl-price { font-size: 20px; font-weight: 700; } .hl-name { min-height: 18px; }
+  .results { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 14px; align-items: start; }
+  .side { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+  .side-head, #side-open { display: none; }
+  .facet { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .f-title { font-weight: 700; } .f-q { width: 100%; }
+  .f-tabs { display: flex; } .f-tabs button { flex: 1; padding: 5px 4px; font-size: 12px; }
+  .f-sort .on { font-weight: 700; text-decoration: underline; } .f-all { display: flex; justify-content: space-between; font-size: 13px; }
+  .f-list { max-height: 340px; overflow: auto; display: flex; flex-direction: column; }
+  .f-item { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; font-weight: 400; color: var(--text); padding: 3px 0; }
+  .f-item .f-name { flex: 1; } .f-fav { font-size: 15px; color: var(--warn); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { background: var(--panel); color: var(--muted); border-radius: 0; padding: 5px 10px; font-size: 13px; font-weight: 600; }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); }
+  button.small { padding: 5px 10px; font-size: 13px; }
+  h3.sect { font-size: 14px; margin: 14px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .group { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+  .g-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 6px; }
+  .g-side { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .star { color: #d97706; font-weight: 700; margin-left: 6px; cursor: help; }
+  .wbadge { background: #f7941d; color: #fff; padding: 2px 8px; font-size: 12px; border-radius: 6px; }
+  .cups { font-size: 12px; white-space: nowrap; } .cups .dim { opacity: .2; }
+  .imgbtn { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 1px solid var(--line);
+            border-radius: 6px; font-size: 12px; font-weight: 700; color: var(--muted); text-decoration: none; }
+  .offers { display: flex; flex-direction: column; }
+  .offer { display: grid; grid-template-columns: minmax(140px, 2fr) 70px 80px minmax(0, 1fr) 90px 110px auto; gap: 8px; align-items: center;
+           padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .offer.best { background: var(--best); }
+  .offer .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .buy { display: inline-flex; gap: 4px; align-items: center; } .buy input { width: 64px; padding: 5px 6px; }
+  .cart-add { padding: 5px 10px; }
+  .more { margin-top: 6px; font-size: 13px; }
+  .m-only { display: none; }
+  .hide-purchase .purchase, .role-customer .purchase, .role-customer .buy, .role-customer #cart-badge { display: none !important; }
+  .hide-purchase .offer, .role-customer .offer { grid-template-columns: 70px 80px minmax(0, 1fr) 110px auto; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); max-width: min(520px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  @media (max-width: 900px) {
+    .cards3 { grid-template-columns: 1fr; }
+    .results { grid-template-columns: 1fr; }
+    #side-open { display: inline-block; }
+    .side { position: fixed; inset: 0 30% 0 0; max-height: none; z-index: 40; background: var(--bg); padding: 12px;
+            transform: translateX(-105%); transition: transform .2s; box-shadow: 4px 0 24px rgba(0,0,0,.2); }
+    .side.open { transform: none; }
+    .side-head { display: flex; justify-content: space-between; }
+  }
+  @media (max-width: 640px) {
+    .tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; } .tab { white-space: nowrap; padding: 8px 10px; }
+    form.searchbar > * { flex: 0 0 auto; } form.searchbar #article { flex: 1 1 auto; min-width: 0; }
+    .cards3 { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 10px; padding-bottom: 4px; }
+    .cards3 .hl { flex: 0 0 82%; scroll-snap-align: start; }
+    .side { inset: 0 0 0 0; }
+    .offer, .hide-purchase .offer, .role-customer .offer { grid-template-columns: 1fr auto; grid-template-areas: "prov price" "meta buy"; row-gap: 4px; }
+    .offer .o-prov { grid-area: prov; } .offer .o-price { grid-area: price; }
+    .offer .o-qty, .offer .o-term, .offer .o-ret, .offer .o-pur { display: inline; font-size: 12px; color: var(--muted); }
+    .offer .o-qty { grid-area: meta; } .offer .o-term, .offer .o-ret, .offer .o-pur { display: none; }
+    .offer .buy { grid-area: buy; justify-self: end; }
+    .m-only { display: block; font-weight: 400; }
+    .offer .o-qty::after { content: attr(data-term); }
+    .g-head { flex-direction: column; } .g-side { justify-content: flex-start; }
+    .toolbar > .row { gap: 6px; }
+    .buy input { width: 56px; } .cart-add { padding: 8px 14px; }
+  }
 </style>
 </head>
 <body>
@@ -143,40 +219,43 @@
       </div>
     </div>
   </details>
-  <form id="form">
-    <label>Бренд <input id="brand" required value="MANN" autocomplete="off"></label>
-    <label>Артикул <input id="article" required value="W712/95" autocomplete="off"></label>
-    <label>Кол-во <input id="quantity" type="number" min="1" value="1"></label>
-    <label>Подбор
-      <select id="strategy">
-        <option value="price">Минимальная цена</option>
-        <option value="fastest">Минимальный срок</option>
-      </select>
-    </label>
-    <label class="check"><input type="checkbox" id="analogs"> с аналогами</label>
+  <form id="form" class="searchbar" autocomplete="off">
+    <input id="article" required placeholder="Артикул, например 162622 или W712/95" aria-label="Артикул">
     <button id="go">Найти</button>
   </form>
-
-  <div class="providers" id="providers"></div>
-
-  <section class="summary" id="summary">
-    <h2 id="sum-status"></h2>
-    <div id="sum-body"></div>
-  </section>
-
-  <div class="toolbar">
-    <span class="muted" id="count"></span>
-    <label class="check"><input type="checkbox" id="customer"> вид для клиента (скрыть закупку)</label>
+  <div id="brandbar" class="brandbar hidden">
+    <span>Бренд: <strong id="brand-now">—</strong> <span class="note" id="brand-votes"></span></span>
+    <button class="link" id="brand-change">Уточнить бренд</button>
+    <div id="brand-choices" class="brand-choices hidden"></div>
   </div>
-  <div class="table-wrap" id="wrap" hidden>
-    <table>
-      <thead><tr>
-        <th>Поставщик</th><th>Бренд</th><th>Артикул</th><th>Наименование</th><th>Склад</th>
-        <th class="num">Наличие</th><th class="num">Срок</th>
-        <th class="num purchase">Закупка, ₽</th><th class="num">Продажа, ₽</th><th>В корзину</th>
-      </tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
+  <div class="providers" id="providers"></div>
+  <div class="msg" id="find-msg"></div>
+  <div id="highlights" class="cards3"></div>
+  <div id="results" class="results hidden">
+    <aside id="side" class="side">
+      <div class="side-head"><strong>Фильтры</strong><button class="link" id="side-close">Закрыть</button></div>
+      <div id="f-brands"></div>
+      <div id="f-providers" class="purchase"></div>
+    </aside>
+    <div class="results-main">
+      <div class="toolbar">
+        <span class="muted" id="count"></span>
+        <span class="row">
+          <button class="secondary small" id="side-open">Фильтры</button>
+          <select id="sort" aria-label="Сортировка">
+            <option value="fast">Быстрее</option><option value="price">Дешевле</option>
+            <option value="qty">Больше в наличии</option><option value="purchase" class="purchase">Закупка</option>
+            <option value="warehouse" class="purchase">Склад</option>
+          </select>
+          <span class="seg" id="term"><button data-term="" class="on">Любой срок</button><button data-term="today">Сегодня</button><button data-term="3">До 3 дней</button></span>
+          <label class="check"><input type="checkbox" id="only-stock"> есть в наличии</label>
+          <label class="check"><input type="checkbox" id="only-return"> только возвратные</label>
+          <label class="check"><input type="checkbox" id="only-warranty"> с гарантией</label>
+          <label class="check"><input type="checkbox" id="customer"> вид для клиента</label>
+        </span>
+      </div>
+      <div id="groups"></div>
+    </div>
   </div>
   </section>
   <section id="tab-file" class="hidden">
@@ -488,57 +567,14 @@ boot();
 function renderChips(names, states) {
   $("providers").innerHTML = names.map((n) => {
     const s = states[n];
-    if (!s) return `<span class="chip wait">${esc(n)}</span>`;
+    if (!s || s.status === "wait") return `<span class="chip wait">${esc(n)}${s ? " …" : ""}</span>`;
+    if (s.status === "ok" && s.count === 0) return `<span class="chip empty">${esc(n)} · пусто</span>`;
     const cls = s.status === "ok" ? "ok" : (s.status || "empty");
     const rel = reliability[n];
     const extra = s.status === "ok" ? ` · ${s.count}` : ` · ${STATUS[s.status] || s.status}`;
     const relNote = rel && rel.enough_data && rel.refused_pct >= 10 ? ` · отказы ${rel.refused_pct}%` : "";
     return `<span class="chip ${cls}" title="${esc(s.reason || s.message || "")}">${esc(n)}${extra}${relNote}</span>`;
   }).join("");
-}
-
-$("form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  $("go").disabled = true; $("summary").style.display = "none"; $("wrap").hidden = true; $("count").textContent = "Ищу…";
-  const body = {brand: $("brand").value.trim(), article: $("article").value.trim(),
-                quantity: Number($("quantity").value) || 1, with_analogs: $("analogs").checked, strategy: $("strategy").value};
-  const started = performance.now();
-  try {
-    const {job_id, providers} = await api("/api/search", {method: "POST", body});
-    lastSearchJob = job_id;
-    const states = {}; renderChips(providers, states);
-    const es = new EventSource(`/api/search/${job_id}/events`);
-    es.addEventListener("provider", (ev) => { const s = JSON.parse(ev.data); states[s.provider] = s; renderChips(providers, states); });
-    es.addEventListener("result", (ev) => { es.close(); render(JSON.parse(ev.data), (performance.now() - started) / 1000); $("go").disabled = false; });
-    es.addEventListener("error", (ev) => {
-      es.close(); $("go").disabled = false;
-      $("count").textContent = ev.data ? "Ошибка: " + JSON.parse(ev.data).message : "Соединение прервано";
-    });
-  } catch (err) { $("count").textContent = "Ошибка: " + err.message; $("go").disabled = false; }
-});
-
-function render(res, seconds) {
-  const o = res.offer;
-  $("summary").style.display = "block";
-  $("sum-status").textContent = res.status + (res.reason ? " — " + res.reason : "");
-  $("sum-body").innerHTML = o ? `
-    <div class="big">${money(o.sale_price)} ₽ <span class="muted purchase" style="font-size:14px;font-weight:500">закупка ${money(o.price)} ₽</span></div>
-    <div>${esc(o.provider)} · ${esc(o.display_brand || o.brand)} ${esc(o.article)} · ${esc(o.warehouse || "")} · ${days(o.delivery_hours)} · ${res.quantity} шт.</div>
-    <div class="muted">${esc(o.name || "")}</div>` : `<div class="muted">Подходящего предложения нет</div>`;
-  const rows = res.alternatives || [];
-  $("count").textContent = `Предложений: ${res.alternatives_total}${res.alternatives_total > rows.length ? `, показаны первые ${rows.length}` : ""} · ${seconds.toFixed(1)} с`;
-  $("rows").innerHTML = rows.map((r) => `
-    <tr class="${o && r.internal_offer_id === o.internal_offer_id ? "selected" : ""}">
-      <td>${esc(r.provider)}${relBadge(r.provider)}</td><td>${esc(r.display_brand || r.brand)}</td>
-      <td>${esc(r.article)}${r.is_cross ? '<span class="an">АН</span>' : ""}</td>
-      <td class="name">${esc(r.name)}</td><td>${esc(r.warehouse)}</td>
-      <td class="num">${r.available_quantity ?? "—"}</td><td class="num">${days(r.delivery_hours)}</td>
-      <td class="num purchase">${money(r.price)}</td><td class="num">${money(r.sale_price)}</td>
-      <td><span class="row" style="flex-wrap:nowrap;gap:4px"><input type="number" min="1" value="${r.actual_order_quantity || 1}" style="width:64px" data-qty="${esc(r.internal_offer_id)}">
-        <button class="secondary" data-add="${esc(r.internal_offer_id)}" title="В корзину">+</button></span></td>
-    </tr>`).join("");
-  document.querySelectorAll("[data-add]").forEach((b) => b.onclick = () => addToCart(b.dataset.add, b));
-  $("wrap").hidden = rows.length === 0;
 }
 
 // ---------- общие помощники для фоновых задач ----------
@@ -691,14 +727,6 @@ $("ord-submit").onclick = async () => {
 let lastSearchJob = null;
 function renderCartBadge(cart) {
   $("cart-count").textContent = cart.positions; $("cart-sum").textContent = money(cart.sale_total);
-}
-async function addToCart(offerId, button) {
-  const qty = Number(document.querySelector(`[data-qty="${CSS.escape(offerId)}"]`).value) || 1;
-  try {
-    const cart = await api("/api/cart", {method: "POST", body: {job_id: lastSearchJob, internal_offer_id: offerId, quantity: qty}});
-    renderCartBadge(cart); button.textContent = "✓"; setTimeout(() => button.textContent = "+", 1200);
-    if (cart.message) $("count").textContent = cart.message;
-  } catch (err) { $("count").textContent = "Корзина: " + err.message; }
 }
 async function loadCart() {
   const cart = await api("/api/cart"); renderCartBadge(cart);
@@ -978,11 +1006,12 @@ async function loadVinDetails(params) {
        <td>${d.oem ? `<button class="secondary" data-oem="${esc(d.oem)}">Цены</button>` : ""}</td></tr>`).join("")}</tbody></table>`
       : '<span class="note">Деталей не найдено. В некоторых узлах детали показываются только на схеме — уточните название.</span>';
     document.querySelectorAll("[data-oem]").forEach((b) => b.onclick = () => {
-      $("brand").value = vinVehicle.oem_brand; $("article").value = b.dataset.oem;
-      $("form").requestSubmit(); $("form").scrollIntoView({behavior: "smooth"});
+      $("article").value = b.dataset.oem;
+      findArticle(b.dataset.oem, {hint: vinVehicle.oem_brand}); $("form").scrollIntoView({behavior: "smooth"});
     });
   } catch (err) { $("vin-details").textContent = err.message; }
 }
 </script>
+<script src="/static/search.js"></script>
 </body>
 </html>

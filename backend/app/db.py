@@ -34,7 +34,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     password_hash: Mapped[str] = mapped_column(String(200))
-    role: Mapped[str] = mapped_column(String(20), default="admin")  # admin | manager
+    role: Mapped[str] = mapped_column(String(20), default="admin")  # admin | manager | customer
+    # личные настройки: избранные бренды и поставщики выдачи и т.п.
+    prefs: Mapped[dict] = mapped_column(JSON, default=dict)
     organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     organization: Mapped[Organization] = relationship(back_populates="users")
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)

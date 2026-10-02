@@ -5,7 +5,13 @@
 три лучших предложения над выдачей.
 """
 
+import json
+import os
+import re
+
 UNKNOWN_HOURS = 999999 * 24
+WARRANTY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "brand_warranty.json")
+_warranty = None
 # Порог автовыбора: лидер назван не меньше чем половиной ответивших и вдвое чаще второго.
 DEFAULT_BRAND_SHARE = 0.5
 DEFAULT_BRAND_LEAD = 2.0
@@ -14,7 +20,7 @@ SEARCH_FIELDS = (
     "provider", "brand", "display_brand", "article", "name", "available_quantity", "minimum_quantity",
     "quantity_step", "actual_order_quantity", "can_order_quantity", "availability_is_lower_bound",
     "delivery_hours", "delivery_display", "warehouse", "is_cross", "returnable", "provider_confirm_count",
-    "internal_offer_id", "is_best_offer",
+    "internal_offer_id", "is_best_offer", "original_article", "normalized_brand_key",
 )
 # Покупателю не отдаём то, по чему он закажет сам: закупку, поставщика, склад, коды предложения.
 PURCHASE_FIELDS = ("purchase_price", "provider", "warehouse", "internal_offer_id")
@@ -45,6 +51,28 @@ def choose_brand(choices, answered, share=DEFAULT_BRAND_SHARE, lead=DEFAULT_BRAN
     if first["votes"] >= share * total and first["votes"] >= lead * max(second["votes"], 0.5):
         return first
     return None
+
+
+def _brand_key(value):
+    return re.sub(r"[^A-ZА-ЯЁ0-9]", "", str(value or "").upper())
+
+
+def match_hint(choices, hint):
+    """Вариант, совпадающий с заранее известным брендом (VAG из Laximo), или None."""
+    key = _brand_key(hint)
+    if not key:
+        return None
+    return next((c for c in choices if _brand_key(c["brand"]) == key), None) or \
+        next((c for c in choices if key in _brand_key(c["label"])), None)
+
+
+def default_warranty():
+    """Стартовый справочник гарантий (данные avtodrug92 из приложения Abcp: срок, рейтинг 0–5, условия)."""
+    global _warranty
+    if _warranty is None:
+        with open(WARRANTY_FILE, encoding="utf-8") as file:
+            _warranty = json.load(file)
+    return _warranty
 
 
 def brand_view(choice):

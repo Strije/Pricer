@@ -123,9 +123,16 @@ class CreateOrderRequest(BaseModel):
 
 
 class FindRequest(BaseModel):
-    """Поиск «Проценки»: только артикул; бренд — подпись варианта из шага выбора (если уточняли)."""
+    """Поиск «Проценки»: только артикул; бренд — подпись варианта из шага выбора (если уточняли),
+    brand_hint — бренд, известный заранее (оригинал из каталога Laximo: VAG, TOYOTA…)."""
     article: str = Field(min_length=1, max_length=80)
     brand: str = Field(default="", max_length=120)
+    brand_hint: str = Field(default="", max_length=80)
+
+
+class FavoritesRequest(BaseModel):
+    brands: list[str] = Field(default_factory=list, max_length=500)
+    providers: list[str] = Field(default_factory=list, max_length=500)
 
 
 class CartAddRequest(BaseModel):
@@ -416,6 +423,10 @@ def create_app(var_dir=None, database_url=None):
     def index():
         return FileResponse(os.path.join(STATIC, "index.html"))
 
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
     # ----- вход -----
 
     @app.post("/api/auth/register")
@@ -676,8 +687,13 @@ def create_app(var_dir=None, database_url=None):
                 with Session() as session:
                     share, lead = search_service.brand_settings(session.get(db.Organization, job.organization_id).settings)
                 choices, answered = engine.search_brands(req.article)
-                picked = next((c for c in choices if c["label"] == req.brand), None) if req.brand else \
-                    search_service.choose_brand(choices, answered, share, lead)
+                if req.brand:
+                    picked = next((c for c in choices if c["label"] == req.brand), None)
+                elif req.brand_hint:
+                    picked = search_service.match_hint(choices, req.brand_hint) or \
+                        search_service.choose_brand(choices, answered, share, lead)
+                else:
+                    picked = search_service.choose_brand(choices, answered, share, lead)
                 job.push("brands", {"choices": [search_service.brand_view(c) for c in choices],
                                     "answered": len(answered), "selected": picked["label"] if picked else "",
                                     "auto": bool(picked and not req.brand)})
@@ -711,6 +727,44 @@ def create_app(var_dir=None, database_url=None):
             state["jobs"].pop(old.id, None)
         threading.Thread(target=run_find, args=(job, user["role"] == "customer"), daemon=True).start()
         return {"job_id": job.id, "providers": engine.provider_names}
+
+    @app.get("/api/me/favorites")
+    def get_favorites(user=Depends(current_user)):
+        with Session() as session:
+            prefs = session.get(db.User, user["id"]).prefs or {}
+            return {"brands": prefs.get("favorite_brands", []), "providers": prefs.get("favorite_providers", [])}
+
+    @app.put("/api/me/favorites")
+    def put_favorites(request: FavoritesRequest, user=Depends(current_user)):
+        clean = lambda values: sorted({str(v).strip()[:120] for v in values if str(v).strip()})  # noqa: E731
+        with Session() as session:
+            row = session.get(db.User, user["id"])
+            row.prefs = {**(row.prefs or {}), "favorite_brands": clean(request.brands),
+                         "favorite_providers": clean(request.providers)}
+            session.commit()
+            return {"brands": row.prefs["favorite_brands"], "providers": row.prefs["favorite_providers"]}
+
+    @app.get("/api/stats/popular")
+    def popular(days: int = 180, user=Depends(current_user)):
+        """«Популярные» в фильтрах выдачи: что организация чаще всего заказывала у поставщиков."""
+        from sqlalchemy import func
+
+        since = db.utcnow() - datetime.timedelta(days=max(1, min(days, 3650)))
+        with Session() as session:
+            def top(column):
+                rows = (session.query(column, func.count(db.SupplierLine.id))
+                        .filter(db.SupplierLine.organization_id == user["organization_id"],
+                                db.SupplierLine.submitted_at >= since, column != "")
+                        .group_by(column).order_by(func.count(db.SupplierLine.id).desc()).limit(50).all())
+                return [{"name": name, "count": count} for name, count in rows]
+            return {"brands": top(db.SupplierLine.brand), "providers": top(db.SupplierLine.provider)}
+
+    @app.get("/api/brands/warranty")
+    def brand_warranty(user=Depends(current_user)):
+        """Гарантии и рейтинг брендов (кубки): справочник организации или стартовый из приложения Abcp."""
+        with Session() as session:
+            own = (session.get(db.Organization, user["organization_id"]).settings or {}).get("brand_warranty")
+        return own or search_service.default_warranty()
 
     # ----- заказ из файла -----
 

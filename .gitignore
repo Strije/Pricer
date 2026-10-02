@@ -8,3 +8,4 @@ config/
 settings.json
 recordings-*.jsonl
 var/
+backend/core/brand_provider_mappings.json

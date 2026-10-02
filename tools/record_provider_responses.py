@@ -9,6 +9,11 @@
 итоговый результат подбора по каждой строке. Заказы НЕ оформляются: методы
 корзины у поставщиков на время записи заблокированы.
 
+Режим --find: поиск как кнопка «Найти» в «Проценке» — только артикул, бренд по ответам
+поставщиков (берётся названный большинством), затем все поставщики и кроссы:
+
+    .venv\\Scripts\\python.exe record_provider_responses.py --find 162622 W71295 OC90
+
 Режим --statuses: вместо поиска запрашивает заказы и статусы позиций из личных
 кабинетов поставщиков (функции веб-версии backend/integrations/supplier_orders.py,
 перенесённые из 1С-обработки) и пишет их ответы — так проверяются реальные форматы:
@@ -263,6 +268,51 @@ def record_statuses(providers, recorder, backend_dir, days):
     return 0
 
 
+def record_find(window, recorder, items):
+    """Поиск «Проценки», как кнопка «Найти»: выбор бренда по ответам поставщиков (берётся вариант,
+    который назвало больше поставщиков, — диалог не показывается), опрос всех, кроссы по прайсам."""
+    from PyQt6.QtCore import Qt
+
+    direct = Qt.ConnectionType.DirectConnection
+    captured = {"results": []}
+
+    def on_results(_search_id, data):
+        captured["results"] = list(data or [])
+
+    def on_brands(article, labels):
+        def votes(label):
+            return len({c.provider for c in window._brand_choice_candidates.get(label, [])})
+        ranked = sorted(labels, key=votes, reverse=True)
+        captured["choices"] = [{"label": label, "votes": votes(label)} for label in ranked]
+        window._select_brand(article, ranked[:1])  # один вариант — без диалога
+
+    for signal, slot in ((window.search_results_ready, on_results), (window.brand_selection_requested, on_brands)):
+        try:
+            signal.disconnect()
+        except TypeError:
+            pass
+        signal.connect(slot, type=direct)
+
+    for item in items:
+        article = item.split(":", 1)[-1].strip()
+        if not article:
+            continue
+        captured.update(results=[], choices=[])
+        recorder.write({"type": "find_start", "article": article})
+        search_id, _ = window.search_state.start(article)
+        try:
+            window._resolve_brand_and_run(search_id, article, window.clean_num(article))
+        except Exception as exc:
+            recorder.write({"type": "find_error", "article": article, "error": f"{type(exc).__name__}: {exc}"})
+            print(f"{article}: ошибка {exc}")
+            continue
+        results = captured["results"]
+        recorder.write({"type": "find_result", "article": article, "choices": captured["choices"],
+                        "selected_brand": getattr(window, "_selected_brand", ""), "results": results})
+        top = ", ".join(f"{c['label']} {c['votes']}" for c in captured["choices"][:4]) or "бренды не названы"
+        print(f"{article}: бренды — {top}; выбран {getattr(window, '_selected_brand', '') or '—'}; предложений {len(results)}")
+
+
 def desktop_submissions(since):
     """Позиции, отправленные из программы с даты since: поставщик -> номера заказов у поставщика."""
     try:
@@ -299,6 +349,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Запись сырых ответов поставщиков")
     parser.add_argument("items", nargs="*", help="БРЕНД:АРТИКУЛ, например ZIC:162622")
     parser.add_argument("--statuses", action="store_true", help="записать заказы и статусы из личных кабинетов")
+    parser.add_argument("--find", action="store_true",
+                        help="поиск как кнопка «Найти»: артикул без бренда, бренд по ответам поставщиков, кроссы")
     parser.add_argument("--days", type=int, default=30, help="за сколько дней брать заказы (для --statuses)")
     parser.add_argument("--pricer-backend", default=r"C:\Pricer-web\backend",
                         help="папка backend веб-версии (для --statuses)")
@@ -355,6 +407,9 @@ def main(argv=None):
             os.remove(output)
             return code
 
+    if args.find:
+        record_find(window, recorder, args.items)
+        args.items = []
     for item in args.items:
         brand, _, article = item.partition(":")
         if not article:

@@ -131,3 +131,40 @@ def test_find_api(app_factory):  # noqa: F811
         assert next(d for k, d in events if k == "brands")["selected"] == label and events[-1][0] == "done"
     finally:
         engine.providers = original
+
+
+def test_favorites_popular_warranty(app_factory):  # noqa: F811
+    make_client, _ = app_factory
+    client = register(make_client(), "fav@example.com", org="Избранное")
+    other = register(make_client(), "fav-other@example.com", org="Другая")
+    assert client.get("/api/me/favorites").json() == {"brands": [], "providers": []}
+    saved = client.put("/api/me/favorites", headers=H, json={"brands": ["ZIC", " MANN ", "ZIC", ""], "providers": ["Rossko"]}).json()
+    assert saved == {"brands": ["MANN", "ZIC"], "providers": ["Rossko"]}
+    assert client.get("/api/me/favorites").json() == saved
+    assert other.get("/api/me/favorites").json()["brands"] == []  # избранное у каждого своё
+
+    pricer = client.app.state.pricer
+    from app import db
+    with pricer["Session"]() as session:
+        org_id = session.query(db.User).filter_by(email="fav@example.com").one().organization_id
+        for i, (brand, provider) in enumerate([("ZIC", "Rossko"), ("ZIC", "Armtek"), ("MANN", "Rossko")]):
+            session.add(db.SupplierLine(organization_id=org_id, order_id="ORD-P", item_index=i, provider=provider,
+                                        brand=brand, submitted_at=db.utcnow()))
+        session.commit()
+    popular = client.get("/api/stats/popular").json()
+    assert popular["brands"][0] == {"name": "ZIC", "count": 2} and popular["providers"][0]["name"] == "Rossko"
+    assert other.get("/api/stats/popular").json() == {"brands": [], "providers": []}
+
+    warranty = client.get("/api/brands/warranty").json()
+    assert warranty["page"].startswith("https://") and len(warranty["brands"]) > 100
+    some = next(iter(warranty["brands"].values()))
+    assert {"name", "warranty", "rating", "conditions"} <= set(some)
+
+
+def test_static_search_script(app_factory):  # noqa: F811
+    make_client, _ = app_factory
+    client = make_client()
+    page = client.get("/").text
+    assert '<script src="/static/search.js"></script>' in page and 'id="article"' in page and 'id="brand"' not in page
+    script = client.get("/static/search.js")
+    assert script.status_code == 200 and "findArticle" in script.text and "detectKind" in script.text
