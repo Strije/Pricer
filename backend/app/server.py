@@ -37,6 +37,7 @@ from app import clients as client_service  # noqa: E402
 from app import db  # noqa: E402
 from app import orders as order_service  # noqa: E402
 from app import supplier_catalog as catalog  # noqa: E402
+from app import supplier_lines as lines_service  # noqa: E402
 from app.redact import Redactor  # noqa: E402
 from app.security import (  # noqa: E402
     SecretBox, hash_password, load_master_key, new_token, token_hash, verify_password,
@@ -152,6 +153,15 @@ class VehicleRequest(BaseModel):
     model: str = Field(default="", max_length=60)
     year: int | None = Field(default=None, ge=1950, le=2100)
     comment: str = Field(default="", max_length=2000)
+
+
+class LineStatusRequest(BaseModel):
+    status: str = Field(pattern="^(confirmed|in_transit|arrived|issued|refused|returned|submitted)$")
+    text: str = Field(default="", max_length=500)
+
+
+class ReplaceRequest(BaseModel):
+    internal_offer_id: str = Field(min_length=1, max_length=64)
 
 
 class ItemsRequest(BaseModel):
@@ -320,6 +330,11 @@ def create_app(var_dir=None, database_url=None):
 
     for org_id, order_id in order_service.recover_interrupted_submits(Session):
         print(f"[pricer] {order_id}: отправка была прервана перезапуском, позиции помечены как unknown")
+        with Session() as session:
+            row = session.query(db.Order).filter_by(organization_id=org_id, order_id=order_id).first()
+            if row is not None:
+                lines_service.sync_order(session, org_id, dict(row.data or {}))
+                session.commit()
 
     # ----- сессии -----
 
@@ -741,6 +756,9 @@ def create_app(var_dir=None, database_url=None):
             messages = []
             engine.on_order_action = lambda order, message: messages.append(message)
             preview, order = order_service.submit(engine, engine.order_store, Session, order_id, request.items)
+            with Session() as session:
+                lines_service.sync_order(session, job.organization_id, order)
+                session.commit()
             job.push("done", engine.redactor.messages({"order": _order_view(order), "message": " ".join(messages), "preview": preview}))
 
         start_job(job, work)
@@ -1018,6 +1036,133 @@ def create_app(var_dir=None, database_url=None):
             cart.clear()
             save_cart(session, user["id"], cart)
         return {"order": _order_view(order)}
+
+    # ----- замена варианта позиции (из групп заказа, как кнопка «Выбрать вариант» в десктопе) -----
+
+    def _variant_group(order, index):
+        items = order.get("items") or []
+        if not (0 <= index < len(items)):
+            raise HTTPException(status_code=404, detail="позиция не найдена")
+        current = str(items[index].get("internal_offer_id") or "")
+        for group in order.get("groups") or []:
+            if any(str(o.get("internal_offer_id") or "") == current for o in group.get("offers") or []):
+                return group, current
+        return None, current
+
+    @app.get("/api/orders/{order_id}/items/{index}/variants")
+    def item_variants(order_id: str, index: int, user=Depends(current_user)):
+        order = _store(user).read(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="заказ не найден")
+        group, current = _variant_group(order, index)
+        if group is None:
+            return []
+        return [{**_offer({**(o.get("snapshot") or {}), **o}), "price": o.get("purchase_price"),
+                 "sale_price": o.get("sale_price")}
+                for o in group.get("offers") or [] if str(o.get("internal_offer_id") or "") != current]
+
+    @app.post("/api/orders/{order_id}/items/{index}/replace")
+    def replace_item(order_id: str, index: int, request: ReplaceRequest, user=Depends(current_user)):
+        engine = engine_for(user["organization_id"])
+        order = engine.order_store.read(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="заказ не найден")
+        group, _current = _variant_group(order, index)
+        offer = next((o for o in (group or {}).get("offers") or []
+                      if str(o.get("internal_offer_id") or "") == request.internal_offer_id), None)
+        if offer is None:
+            raise HTTPException(status_code=404, detail="вариант не найден среди сохранённых в заказе")
+        variant = {**(offer.get("snapshot") or {}), **{k: v for k, v in offer.items() if k != "snapshot"}}
+        return _item_action(user, order_id, index,
+                            lambda eng: eng._replace_order_item_with_variant(order_id, index, variant))
+
+    # ----- заказы поставщикам -----
+
+    def sync_all_lines(organization_id):
+        orders = engine_for(organization_id).order_store.list_orders()
+        with Session() as session:
+            for order in orders:
+                lines_service.sync_order(session, organization_id, order)
+            session.commit()
+
+    @app.get("/api/supplier-lines")
+    def supplier_lines(provider: str = "", brand: str = "", status: str = "", date_from: str = "", date_to: str = "",
+                       q: str = "", user=Depends(current_user)):
+        sync_all_lines(user["organization_id"])
+
+        def parse(value):
+            try:
+                return datetime.datetime.fromisoformat(value) if value else None
+            except ValueError:
+                raise HTTPException(status_code=400, detail="дата в формате ГГГГ-ММ-ДД")
+
+        with Session() as session:
+            rows = lines_service.query(session, user["organization_id"], provider=provider, brand=brand, status=status,
+                                       date_from=parse(date_from), date_to=parse(date_to), q=q)
+            everything = session.query(db.SupplierLine).filter_by(organization_id=user["organization_id"])
+            facets = {
+                "providers": sorted({r.provider for r in everything if r.provider}),
+                "brands": sorted({r.brand for r in everything if r.brand}),
+                "statuses": [{"code": k, "label": v[0]} for k, v in lines_service.STATUSES.items()],
+            }
+            return {"rows": [lines_service.line_view(r) for r in rows], "facets": facets}
+
+    def _line(session, user, line_id):
+        line = session.get(db.SupplierLine, line_id)
+        if line is None or line.organization_id != user["organization_id"]:
+            raise HTTPException(status_code=404, detail="позиция не найдена")
+        return line
+
+    @app.get("/api/supplier-lines/{line_id}")
+    def supplier_line(line_id: int, user=Depends(current_user)):
+        with Session() as session:
+            line = _line(session, user, line_id)
+            labels = {k: v[0] for k, v in lines_service.STATUSES.items()}
+            return {**lines_service.line_view(line), "events": [
+                {"at": e.at.isoformat(timespec="seconds"), "status": e.status, "label": labels.get(e.status, e.status),
+                 "text": e.text, "source": e.source} for e in line.events]}
+
+    @app.post("/api/supplier-lines/{line_id}/status")
+    def set_line_status(line_id: int, request: LineStatusRequest, user=Depends(current_user)):
+        with Session() as session:
+            line = _line(session, user, line_id)
+            lines_service.add_event(session, line, request.status, request.text, source="manual", user_id=user["id"])
+            session.commit()
+            return lines_service.line_view(line)
+
+    @app.post("/api/supplier-lines/refresh")
+    def refresh_lines(user=Depends(current_user)):
+        job = Job(None, user["organization_id"], kind="refresh")
+
+        def work(engine):
+            from engine import PROVIDER_DISPLAY_NAMES
+
+            replay_reset(engine)
+            report = []
+            for provider in engine.providers:
+                cls = type(provider).__name__
+                fetch = lines_service.STATUS_FETCHERS.get(cls)
+                if not fetch:
+                    continue
+                name = PROVIDER_DISPLAY_NAMES.get(cls, cls)
+                with Session() as session:
+                    try:
+                        changed = fetch(session, job.organization_id, provider, name)
+                        session.commit()
+                        report.append({"provider": name, "changed": changed})
+                    except Exception as exc:
+                        session.rollback()
+                        report.append({"provider": name, "error": engine.redactor.text(str(exc))[:200]})
+            job.push("done", {"providers": report})
+
+        start_job(job, work)
+        return {"job_id": job.id}
+
+    @app.get("/api/supplier-stats")
+    def supplier_stats(days: int = 180, user=Depends(current_user)):
+        sync_all_lines(user["organization_id"])
+        with Session() as session:
+            return lines_service.stats(session, user["organization_id"], days=max(1, min(days, 3650)))
 
     @app.get("/api/jobs/{job_id}/events")
     @app.get("/api/search/{job_id}/events")

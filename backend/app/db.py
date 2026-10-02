@@ -121,6 +121,47 @@ class Vehicle(Base):
     client: Mapped[Client] = relationship(back_populates="vehicles")
 
 
+class SupplierLine(Base):
+    """Позиция, отправленная поставщику: текущий статус («в пути», «на складе», «отказ»…)."""
+    __tablename__ = "supplier_lines"
+    __table_args__ = (UniqueConstraint("organization_id", "order_id", "item_index"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)
+    item_index: Mapped[int] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(100), default="", index=True)
+    brand: Mapped[str] = mapped_column(String(100), default="", index=True)
+    article: Mapped[str] = mapped_column(String(100), default="")
+    name: Mapped[str] = mapped_column(String(300), default="")
+    warehouse: Mapped[str] = mapped_column(String(120), default="")
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    purchase_price: Mapped[float] = mapped_column(default=0.0)
+    client_name: Mapped[str] = mapped_column(String(200), default="")
+    supplier_ref: Mapped[str] = mapped_column(String(100), default="")  # номер позиции/заказа у поставщика
+    promised_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)  # срок, обещанный при подборе
+    submitted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="", index=True)
+    status_text: Mapped[str] = mapped_column(String(500), default="")
+    status_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    arrived_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    events: Mapped[list["SupplierLineEvent"]] = relationship(back_populates="line", cascade="all, delete-orphan",
+                                                             order_by="SupplierLineEvent.id")
+
+
+class SupplierLineEvent(Base):
+    """Движение позиции: смена статуса, кто/что изменил (отправка, поставщик, оператор)."""
+    __tablename__ = "supplier_line_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    line_id: Mapped[int] = mapped_column(ForeignKey("supplier_lines.id"), index=True)
+    at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
+    status: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(String(500), default="")
+    source: Mapped[str] = mapped_column(String(20), default="manual")  # submit | supplier | manual
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    line: Mapped[SupplierLine] = relationship(back_populates="events")
+
+
 class Cart(Base):
     """Корзина пользователя (в десктопе — DraftCart в памяти окна): строки в формате DraftCart."""
     __tablename__ = "carts"

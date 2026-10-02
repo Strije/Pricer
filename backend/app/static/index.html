@@ -115,6 +115,7 @@
     <button class="tab active" data-tab="search">Поиск</button>
     <button class="tab" data-tab="file">Заказ из файла</button>
     <button class="tab" data-tab="orders">Заказы</button>
+    <button class="tab" data-tab="lines">Заказы поставщикам</button>
     <button class="tab" data-tab="cart">Корзина</button>
     <button class="tab" data-tab="clients">Клиенты</button>
     <button class="tab" data-tab="suppliers">Поставщики</button>
@@ -219,6 +220,39 @@
         </table>
       </div>
       <details style="margin-top:10px"><summary class="note">Журнал отправок</summary><div id="ord-log" class="note"></div></details>
+    </div>
+  </section>
+  <section id="tab-lines" class="hidden">
+    <details class="panel" id="rel-panel"><summary><strong>Надёжность поставщиков</strong> <span class="note">за 180 дней, по журналу отправок</span></summary>
+      <div class="table-wrap" style="margin-top:10px"><table>
+        <thead><tr><th>Поставщик</th><th class="num">Позиций</th><th class="num">Отказы</th><th class="num">Без подтверждения</th>
+          <th class="num">Не приняты</th><th class="num">Пришло</th><th class="num">Срок факт / обещан, дн</th><th class="num">Опоздания</th></tr></thead>
+        <tbody id="rel-rows"></tbody></table></div>
+      <div class="note">Пока по поставщику меньше 5 позиций, проценты показаны серым: выводы делать рано.</div>
+    </details>
+    <div class="panel row">
+      <select id="ln-provider"><option value="">Все поставщики</option></select>
+      <select id="ln-brand"><option value="">Все бренды</option></select>
+      <select id="ln-status"><option value="">Все статусы</option><option value="open">Только незакрытые</option></select>
+      <label class="check">с <input type="date" id="ln-from"></label><label class="check">по <input type="date" id="ln-to"></label>
+      <input id="ln-q" placeholder="артикул, клиент, заказ" style="flex:1 1 160px">
+      <button class="secondary" id="ln-refresh">Обновить статусы у поставщиков</button>
+      <span class="msg" id="ln-msg"></span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Отправлено</th><th>Заказ</th><th>Клиент</th><th>Поставщик</th><th>Бренд</th><th>Артикул</th><th>Наименование</th>
+        <th class="num">Кол-во</th><th class="num purchase">Закупка</th><th>Ожидается</th><th>Статус</th></tr></thead>
+      <tbody id="ln-rows"></tbody></table></div>
+    <div class="panel hidden" id="ln-card" style="margin-top:14px">
+      <div id="ln-title" style="font-weight:600"></div>
+      <div id="ln-history" class="note" style="margin:8px 0"></div>
+      <div class="row">
+        <select id="ln-new-status"><option value="confirmed">подтверждён поставщиком</option><option value="in_transit">в пути</option>
+          <option value="arrived">пришёл на склад</option><option value="issued">выдан клиенту</option><option value="refused">отказ поставщика</option>
+          <option value="returned">возврат поставщику</option></select>
+        <input id="ln-text" placeholder="комментарий: трек, причина отказа…" style="flex:1 1 220px">
+        <button id="ln-save">Изменить статус</button>
+      </div>
     </div>
   </section>
   <section id="tab-cart" class="hidden">
@@ -362,11 +396,12 @@ $("auth-form").addEventListener("submit", async (e) => {
 $("logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}).catch(() => {}); showAuth(); };
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  for (const name of ["search", "file", "orders", "cart", "clients", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
+  for (const name of ["search", "file", "orders", "lines", "cart", "clients", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "suppliers") loadSuppliers();
   if (t.dataset.tab === "orders") loadOrders();
   if (t.dataset.tab === "cart") loadCart();
   if (t.dataset.tab === "clients") loadClients();
+  if (t.dataset.tab === "lines") { loadLines(); loadReliability(); }
 });
 
 async function loadSuppliers() {
@@ -431,8 +466,10 @@ function renderChips(names, states) {
     const s = states[n];
     if (!s) return `<span class="chip wait">${esc(n)}</span>`;
     const cls = s.status === "ok" ? "ok" : (s.status || "empty");
+    const rel = reliability[n];
     const extra = s.status === "ok" ? ` · ${s.count}` : ` · ${STATUS[s.status] || s.status}`;
-    return `<span class="chip ${cls}" title="${esc(s.reason || s.message || "")}">${esc(n)}${extra}</span>`;
+    const relNote = rel && rel.enough_data && rel.refused_pct >= 10 ? ` · отказы ${rel.refused_pct}%` : "";
+    return `<span class="chip ${cls}" title="${esc(s.reason || s.message || "")}">${esc(n)}${extra}${relNote}</span>`;
   }).join("");
 }
 
@@ -468,7 +505,7 @@ function render(res, seconds) {
   $("count").textContent = `Предложений: ${res.alternatives_total}${res.alternatives_total > rows.length ? `, показаны первые ${rows.length}` : ""} · ${seconds.toFixed(1)} с`;
   $("rows").innerHTML = rows.map((r) => `
     <tr class="${o && r.internal_offer_id === o.internal_offer_id ? "selected" : ""}">
-      <td>${esc(r.provider)}</td><td>${esc(r.display_brand || r.brand)}</td>
+      <td>${esc(r.provider)}${relBadge(r.provider)}</td><td>${esc(r.display_brand || r.brand)}</td>
       <td>${esc(r.article)}${r.is_cross ? '<span class="an">АН</span>' : ""}</td>
       <td class="name">${esc(r.name)}</td><td>${esc(r.warehouse)}</td>
       <td class="num">${r.available_quantity ?? "—"}</td><td class="num">${days(r.delivery_hours)}</td>
@@ -587,10 +624,13 @@ function renderOrder(order) {
       <td>${badge(VERIFY, it.verification_status)}${it.verification_message ? `<div class="note">${esc(it.verification_message)}</div>` : ""}</td>
       <td>${badge(SUBMIT, it.submit_status)}${it.submit_unknown_reason ? `<div class="note">${esc(it.submit_unknown_reason)}</div>` : ""}</td>
       <td class="name note">${esc(String(resp).slice(0, 160))}</td>
-      <td>${canSkip ? `<button class="link" data-skip="${i}">пропустить</button>` : it.submit_status === "skipped" ? `<button class="link" data-restore="${i}">вернуть</button>` : ""}</td></tr>`;
+      <td>${canSkip ? `<button class="link" data-skip="${i}">пропустить</button>` : it.submit_status === "skipped" ? `<button class="link" data-restore="${i}">вернуть</button>` : ""}
+        ${canSkip && order.status !== "sent" && (order.groups || []).length ? `<br><button class="link" data-replace="${i}">заменить</button>` : ""}</td></tr>
+      <tr class="hidden" id="variants-${i}"><td colspan="11"></td></tr>`;
   }).join("");
   document.querySelectorAll("[data-skip]").forEach((b) => b.onclick = () => itemAction(b.dataset.skip, "skip"));
   document.querySelectorAll("[data-restore]").forEach((b) => b.onclick = () => itemAction(b.dataset.restore, "restore"));
+  document.querySelectorAll("[data-replace]").forEach((b) => b.onclick = () => showVariants(Number(b.dataset.replace)));
   $("ord-submit").disabled = order.status === "sent";
 }
 async function itemAction(index, action) {
@@ -750,6 +790,90 @@ $("cl-vform").addEventListener("submit", async (e) => {
     openClient(currentClient.id); loadClients();
   } catch (err) { $("cl-vmsg").textContent = err.message; }
 });
+
+// ---------- надёжность поставщиков ----------
+let reliability = {};
+function relBadge(provider) {
+  const r = reliability[provider];
+  if (!r || !r.enough_data) return "";
+  const warn = r.refused_pct >= 10 || (r.late_pct || 0) >= 30;
+  return warn ? ` <span class="st warn" title="по журналу отправок: отказы ${r.refused_pct}%, опоздания ${r.late_pct ?? "—"}%">отказы ${r.refused_pct}%</span>` : "";
+}
+async function loadReliability() {
+  try {
+    const stats = await api("/api/supplier-stats"); reliability = {};
+    stats.forEach((r) => reliability[r.provider] = r);
+    const pct = (v, r) => v == null ? "—" : `<span class="${r.enough_data ? "" : "muted"}">${v}%</span>`;
+    $("rel-rows").innerHTML = stats.length ? stats.map((r) => `<tr><td>${esc(r.provider)}</td><td class="num">${r.lines}</td>
+      <td class="num">${pct(r.refused_pct, r)}</td><td class="num">${pct(r.unknown_pct, r)}</td><td class="num">${pct(r.failed_pct, r)}</td>
+      <td class="num">${r.arrived}</td><td class="num">${r.avg_days ?? "—"} / ${r.avg_promised_days ?? "—"}</td><td class="num">${pct(r.late_pct, r)}</td></tr>`).join("")
+      : '<tr><td colspan="8" class="muted">Отправок ещё не было</td></tr>';
+  } catch (e) {}
+}
+
+// ---------- заказы поставщикам ----------
+let currentLine = null, lnTimer = null;
+const LINE_CLS = {submitted: "muted", unknown: "warn", failed: "bad", confirmed: "ok", in_transit: "warn", arrived: "ok", issued: "ok", refused: "bad", returned: "bad"};
+async function loadLines() {
+  const params = new URLSearchParams({provider: $("ln-provider").value, brand: $("ln-brand").value, status: $("ln-status").value,
+    date_from: $("ln-from").value, date_to: $("ln-to").value, q: $("ln-q").value.trim()});
+  const data = await api(`/api/supplier-lines?${params}`);
+  const keep = (sel, values, first) => { const v = sel.value; sel.innerHTML = first + values.map((x) => `<option>${esc(x)}</option>`).join(""); sel.value = v; };
+  keep($("ln-provider"), data.facets.providers, '<option value="">Все поставщики</option>');
+  keep($("ln-brand"), data.facets.brands, '<option value="">Все бренды</option>');
+  if ($("ln-status").options.length <= 2) data.facets.statuses.forEach((st) => $("ln-status").insertAdjacentHTML("beforeend", `<option value="${st.code}">${esc(st.label)}</option>`));
+  const dt = (v) => v ? v.replace("T", " ").slice(0, 16) : "—";
+  $("ln-rows").innerHTML = data.rows.length ? data.rows.map((r) => `<tr class="clickable" data-line="${r.id}">
+    <td>${dt(r.submitted_at)}</td><td>${esc(r.order_id)}</td><td>${esc(r.client)}</td><td>${esc(r.provider)}</td><td>${esc(r.brand)}</td>
+    <td>${esc(r.article)}</td><td class="name">${esc(r.name)}</td><td class="num">${r.quantity}</td><td class="num purchase">${money(r.purchase_price)}</td>
+    <td>${r.overdue ? `<span class="st bad">просрочено с ${dt(r.expected_at).slice(0, 10)}</span>` : dt(r.expected_at).slice(0, 10)}</td>
+    <td><span class="st ${LINE_CLS[r.status] || "muted"}">${esc(r.status_label)}</span>${r.status_text ? `<div class="note">${esc(r.status_text.slice(0, 80))}</div>` : ""}</td></tr>`).join("")
+    : '<tr><td colspan="11" class="muted">Нет позиций по фильтру. Позиции появляются после отправки заказа поставщикам.</td></tr>';
+  document.querySelectorAll("[data-line]").forEach((tr) => tr.onclick = () => openLine(Number(tr.dataset.line)));
+}
+["ln-provider", "ln-brand", "ln-status", "ln-from", "ln-to"].forEach((id) => $(id).onchange = loadLines);
+$("ln-q").addEventListener("input", () => { clearTimeout(lnTimer); lnTimer = setTimeout(loadLines, 300); });
+async function openLine(id) {
+  const l = await api(`/api/supplier-lines/${id}`); currentLine = l;
+  $("ln-card").classList.remove("hidden");
+  $("ln-title").textContent = `${l.provider} · ${l.brand} ${l.article} × ${l.quantity} · заказ ${l.order_id}${l.supplier_ref ? " · № у поставщика " + l.supplier_ref : ""}`;
+  const src = {submit: "отправка", supplier: "поставщик", manual: "вручную"};
+  $("ln-history").innerHTML = l.events.map((e) => `${esc(e.at.replace("T", " ").slice(0, 16))} — <strong>${esc(e.label)}</strong> (${src[e.source] || e.source})${e.text ? " · " + esc(e.text) : ""}`).join("<br>");
+}
+$("ln-save").onclick = async () => {
+  try {
+    await api(`/api/supplier-lines/${currentLine.id}/status`, {method: "POST", body: {status: $("ln-new-status").value, text: $("ln-text").value.trim()}});
+    $("ln-text").value = ""; openLine(currentLine.id); loadLines(); loadReliability();
+  } catch (err) { $("ln-msg").textContent = err.message; }
+};
+$("ln-refresh").onclick = async () => {
+  $("ln-msg").className = "msg"; $("ln-msg").textContent = "Запрашиваю статусы…";
+  try {
+    const r = await api("/api/supplier-lines/refresh", {method: "POST"});
+    const end = await listenJob(r.job_id, {});
+    const parts = (end.data.providers || []).map((p) => p.error ? `${p.provider}: ошибка` : `${p.provider}: изменений ${p.changed}`);
+    $("ln-msg").className = "msg ok";
+    $("ln-msg").textContent = parts.length ? parts.join(", ") : "Ни один подключённый поставщик пока не отдаёт статусы автоматически — меняйте статус вручную";
+    loadLines(); loadReliability();
+  } catch (err) { $("ln-msg").textContent = err.message; }
+};
+loadReliability();
+
+// ---------- замена варианта позиции ----------
+async function showVariants(index) {
+  const row = $(`variants-${index}`), cell = row.querySelector("td");
+  if (!row.classList.contains("hidden")) { row.classList.add("hidden"); return; }
+  const list = await api(`/api/orders/${encodeURIComponent(currentOrder.order_id)}/items/${index}/variants`);
+  cell.innerHTML = list.length ? `<div class="row"><select id="vsel-${index}">${list.map((v) => `<option value="${esc(v.internal_offer_id)}">${esc(variantLabel(v))} · ${esc(v.warehouse || "")}</option>`).join("")}</select>
+    <button class="secondary" id="vgo-${index}">Заменить</button></div>` : '<span class="note">Других вариантов в заказе не сохранено</span>';
+  row.classList.remove("hidden");
+  if (list.length) $(`vgo-${index}`).onclick = async () => {
+    try {
+      const r = await api(`/api/orders/${encodeURIComponent(currentOrder.order_id)}/items/${index}/replace`, {method: "POST", body: {internal_offer_id: $(`vsel-${index}`).value}});
+      renderOrder(r.order); loadOrders();
+    } catch (err) { $("ord-msg").textContent = err.message; }
+  };
+}
 </script>
 </body>
 </html>
