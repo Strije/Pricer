@@ -421,7 +421,27 @@ def create_app(var_dir=None, database_url=None):
         engine.order_store = order_service.DbOrderStore(Session, organization_id, redactor=redactor)
         engine.order_history = order_service.DbOrderHistory(Session, organization_id, redactor=redactor)
         engine.redactor = redactor
+        engine.site_links = site_links(organization_id)
         return engine
+
+    def site_links(organization_id):
+        """Поставщик (имя в выдаче) -> ссылка поиска на его сайте с {article}: из настроек поставщика."""
+        links = {}
+        with Session() as session:
+            org = session.get(db.Organization, organization_id)
+            for account in org.accounts:
+                template = str((account.config or {}).get("site_search_url") or "").strip()
+                if not template or catalog.CATALOG.get(account.section, {}).get("service"):
+                    continue
+                try:
+                    from engine import PROVIDER_DISPLAY_NAMES
+
+                    for provider in account_engine(org, account).providers:
+                        cls = type(provider).__name__
+                        links[PROVIDER_DISPLAY_NAMES.get(cls, getattr(provider, "DISPLAY_NAME", cls))] = template
+                except Exception:
+                    continue
+        return links
 
     for org_id, order_id in order_service.recover_interrupted_submits(Session):
         print(f"[pricer] {order_id}: отправка была прервана перезапуском, позиции помечены как unknown")
@@ -612,6 +632,48 @@ def create_app(var_dir=None, database_url=None):
                         view["active"] = False
                 out.append(view)
             return out
+
+    @app.post("/api/services/{section}/check")
+    def check_service(section: str, user=Depends(admin_user)):
+        """Проверка подключения сервиса без побочных действий: ЮKassa — «информация о магазине»,
+        Laximo — пробный поиск машины (неверный ключ Laximo отвечает «доступ запрещён»)."""
+        with Session() as session:
+            account = session.query(db.SupplierAccount).filter_by(organization_id=user["organization_id"], section=section).first()
+            if account is None:
+                raise HTTPException(status_code=404, detail="сервис не подключён")
+            cfg = {**(account.config or {}), **box.open(account.secrets_sealed)}
+            secrets_list = list(box.open(account.secrets_sealed).values())
+        redactor = Redactor(secrets_list)
+        started = time.monotonic()
+        try:
+            if section == "yookassa":
+                info = yookassa_client(cfg).me()
+                status = {"ok": True, "message": f"магазин {info['account_id']} · {'тестовый' if info['test'] else 'боевой'}"
+                          f" · чеки {'включены' if info['fiscalization'] else 'выключены'}", **info}
+                if cfg.get("receipts") and not info["fiscalization"]:
+                    status = {**status, "ok": False, "message": status["message"] + " — в Pricer чеки включены, а в ЮKassa нет"}
+            elif section == "laximo":
+                from laximo import LaximoClient, LaximoError
+
+                try:
+                    _, vehicles = LaximoClient(cfg.get("login"), cfg.get("password")).find_vehicle("WAUBH54B11N111054")
+                    status = {"ok": True, "message": f"Laximo отвечает (пробный VIN: машин {len(vehicles)})"}
+                except LaximoError as exc:
+                    status = {"ok": False, "message": str(exc)}
+            else:
+                raise HTTPException(status_code=400, detail="для этого раздела проверки нет")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            status = {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+        status["message"] = redactor.text(status["message"])[:300]
+        status["seconds"] = round(time.monotonic() - started, 1)
+        status["at"] = db.utcnow().isoformat(timespec="seconds")
+        with Session() as session:
+            account = session.query(db.SupplierAccount).filter_by(organization_id=user["organization_id"], section=section).first()
+            account.status = {k: status[k] for k in ("ok", "message", "seconds", "at")}
+            session.commit()
+        return status
 
     CHECK_ARTICLE = "OC90"  # ходовой номер: его знают почти все поставщики
 

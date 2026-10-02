@@ -95,7 +95,9 @@ CATALOG = {
 
 # Общие для всех поставщиков поля (видны в форме, не секретные).
 COMMON_FIELDS = [("enabled", "Включён", "bool"), ("timeout", "Таймаут, с", "int"),
-                 ("warehouse_extra_days", "Доп. дни по складам", "text")]
+                 ("warehouse_extra_days", "Доп. дни по складам", "text"),
+                 # ссылка на поиск этого артикула на сайте поставщика: {article}, {brand}
+                 ("site_search_url", "Поиск на сайте поставщика: ссылка с {article}", "text")]
 
 # Настройки организации (не относятся к конкретному поставщику).
 ORG_KEYS = ("default_markup", "markup_rules", "rounding_mode", "rounding_from", "rounding_to",
@@ -167,7 +169,10 @@ def public_catalog():
         section: {
             "title": spec["title"],
             "multiple": bool(spec.get("multiple")),
-            "fields": [{"name": n, "label": label, "type": kind} for n, label, kind in COMMON_FIELDS + spec["fields"]],
+            "service": bool(spec.get("service")),
+            # у сервисов (Laximo, ЮKassa) общих полей поставщика нет — свои карточки в «Сервисах»
+            "fields": [{"name": n, "label": label, "type": kind}
+                       for n, label, kind in ([] if spec.get("service") else COMMON_FIELDS) + spec["fields"]],
         }
         for section, spec in CATALOG.items()
     }

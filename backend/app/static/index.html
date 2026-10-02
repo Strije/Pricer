@@ -187,6 +187,10 @@
   .switch input { opacity: 0; width: 0; height: 0; }
   .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: .15s; }
   .switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+  .subtabs { margin-bottom: 12px; flex-wrap: wrap; }
+  .services { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+  .svc h3 { margin: 0 0 4px; font-size: 16px; } .svc label { margin-top: 8px; } .svc input, .svc select { width: 100%; }
+  .svc .row label { margin-top: 0; } .svc input[type=checkbox] { width: auto; } .svc label.check { flex-direction: row; justify-content: flex-start; }
   .switch input:checked + span { background: var(--ok); } .switch input:checked + span::before { transform: translateX(16px); }
   .quotes-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
   .q-list { display: flex; flex-direction: column; gap: 6px; }
@@ -234,7 +238,7 @@
     <button class="tab" data-tab="cart">Корзина</button>
     <button class="tab" data-tab="quotes">Подборы</button>
     <button class="tab" data-tab="clients">Клиенты</button>
-    <button class="tab" data-tab="suppliers">Поставщики</button>
+    <button class="tab" data-tab="suppliers">Настройки</button>
   </nav>
   <section id="tab-search">
   <details class="panel" id="vin-panel"><summary><strong>Подбор по VIN, номеру кузова или госномеру</strong> <span class="note">каталог Laximo</span></summary>
@@ -455,19 +459,11 @@
     </div>
   </section>
   <section id="tab-suppliers" class="hidden">
-    <details class="panel" id="search-settings"><summary><strong>Настройки поиска</strong> <span class="note">автовыбор бренда</span></summary>
-      <div class="row" style="margin-top:10px">
-        <label>Бренд выбирается сам, если его назвали не меньше, % ответивших
-          <input type="number" id="ss-share" min="0" max="100" step="5" style="width:90px"></label>
-        <label>и чаще второго варианта, раз
-          <input type="number" id="ss-lead" min="1" max="10" step="0.1" style="width:90px"></label>
-        <button class="secondary" id="ss-save">Сохранить</button><span class="msg" id="ss-msg"></span>
-      </div>
-      <label style="margin-top:10px">Состав «ТО по машине» (по строке на пункт, как в каталоге: «Фильтр масляный»)
-        <textarea id="ss-service" rows="6"></textarea></label>
-      <div class="note">Иначе поиск предложит выбрать бренд. Голоса — сколько поставщиков назвали бренд для артикула;
-        упоминание бренда в названиях других вариантов («ан. MAHLE OC90») считается ещё одним голосом.</div>
-    </details>
+    <div class="seg subtabs" id="settings-tabs">
+      <button data-st="suppliers" class="on">Поставщики</button><button data-st="prices">Прайс-листы</button>
+      <button data-st="services">Сервисы</button><button data-st="search">Поиск и цены</button>
+    </div>
+    <div id="st-suppliers">
     <details class="panel" id="sup-add"><summary><strong>Добавить или импортировать</strong> <span class="note">поставщик вручную или все из settings.json десктопа</span></summary>
       <div style="margin-top:10px">
     <div>
@@ -494,6 +490,24 @@
       <span class="note" id="sup-count"></span>
     </div>
     <div id="cards" class="acc-list"></div>
+    </div>
+    <div id="st-prices" class="hidden"><div id="prices-box"></div></div>
+    <div id="st-services" class="hidden"><div id="services-box" class="services"></div></div>
+    <div id="st-search" class="hidden">
+    <div class="panel" id="search-settings"><strong>Автовыбор бренда и «ТО по машине»</strong>
+      <div class="row" style="margin-top:10px">
+        <label>Бренд выбирается сам, если его назвали не меньше, % ответивших
+          <input type="number" id="ss-share" min="0" max="100" step="5" style="width:90px"></label>
+        <label>и чаще второго варианта, раз
+          <input type="number" id="ss-lead" min="1" max="10" step="0.1" style="width:90px"></label>
+        <button class="secondary" id="ss-save">Сохранить</button><span class="msg" id="ss-msg"></span>
+      </div>
+      <label style="margin-top:10px">Состав «ТО по машине» (по строке на пункт, как в каталоге: «Фильтр масляный»)
+        <textarea id="ss-service" rows="6"></textarea></label>
+      <div class="note">Иначе поиск предложит выбрать бренд. Голоса — сколько поставщиков назвали бренд для артикула;
+        упоминание бренда в названиях других вариантов («ан. MAHLE OC90») считается ещё одним голосом.</div>
+    </div>
+    </div>
   </section>
 </main>
 <div id="toasts" aria-live="polite"></div>
@@ -553,7 +567,8 @@ async function boot() {
     api("/api/cart").then(renderCartBadge).catch(() => {});
     startNotifications(me.email);
     catalog = await api("/api/catalog");
-    $("add-section").innerHTML = Object.entries(catalog).map(([k, v]) => `<option value="${k}">${esc(v.title)}</option>`).join("");
+    $("add-section").innerHTML = Object.entries(catalog).filter(([k, v]) => !v.service && k !== "url_csv")
+      .map(([k, v]) => `<option value="${k}">${esc(v.title)}</option>`).join("");
   } catch (e) { showAuth(); }
 }
 $("auth-form").addEventListener("submit", async (e) => {
@@ -610,7 +625,8 @@ function supState(acc) {
   return ["ok", "подключён", "ok"];
 }
 async function loadSuppliers() {
-  supList = await api("/api/suppliers");
+  // сервисы (Laximo, ЮKassa) и прайс-листы — в своих разделах настроек
+  supList = (await api("/api/suppliers")).filter((a) => !(catalog[a.section] || {}).service && a.section !== "url_csv");
   renderSuppliers();
 }
 function renderSuppliers() {
@@ -1194,7 +1210,13 @@ async function loadSearchSettings() {
     $("ss-service").value = (st.service_template || ["Фильтр масляный", "Фильтр воздушный", "Фильтр салона", "Фильтр топливный", "Свечи зажигания", "Колодки тормозные передние"]).join("\n");
   } catch (e) {}
 }
-$("search-settings").addEventListener("toggle", () => { if ($("search-settings").open) loadSearchSettings(); });
+document.querySelectorAll("#settings-tabs [data-st]").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("#settings-tabs [data-st]").forEach((x) => x.classList.toggle("on", x === b));
+  for (const name of ["suppliers", "prices", "services", "search"]) $("st-" + name).classList.toggle("hidden", b.dataset.st !== name);
+  if (b.dataset.st === "search") loadSearchSettings();
+  if (b.dataset.st === "services") loadServices();
+  if (b.dataset.st === "prices") loadPrices();
+});
 $("ss-save").onclick = async () => {
   const share = Number($("ss-share").value) / 100, lead = Number($("ss-lead").value);
   if (!(share >= 0 && share <= 1) || !(lead >= 1)) { $("ss-msg").textContent = "Доля — от 0 до 100 %, перевес — от 1"; return; }
@@ -1207,5 +1229,6 @@ $("ss-save").onclick = async () => {
 </script>
 <script src="/static/search.js"></script>
 <script src="/static/quotes.js"></script>
+<script src="/static/settings.js"></script>
 </body>
 </html>

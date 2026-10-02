@@ -90,6 +90,12 @@ def offer_view(item, engine, customer=False):
     row["sale_price"] = round(float(engine.apply_markup(purchase)[0]), 2) if purchase else None
     images = item.get("image_urls") or []
     row["image_url"] = (images[0] if isinstance(images, list) else str(images)) if images else ""
+    template = (getattr(engine, "site_links", None) or {}).get(item.get("provider") or "")
+    if template and not customer:  # ссылка раскрывает поставщика — покупателю её не даём
+        from urllib.parse import quote
+
+        row["site_url"] = template.replace("{article}", quote(str(item.get("article") or ""))) \
+            .replace("{brand}", quote(str(item.get("brand") or "")))
     if customer:
         for field in PURCHASE_FIELDS:
             row.pop(field, None)

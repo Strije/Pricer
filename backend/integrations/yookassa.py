@@ -83,6 +83,13 @@ class YooKassaClient:
                 "url": (data.get("confirmation") or {}).get("confirmation_url"),
                 "amount": float((data.get("amount") or {}).get("value") or amount)}
 
+    def me(self):
+        """Информация о магазине: принят ли ключ, боевой или тестовый, включены ли чеки (54-ФЗ)."""
+        data = self._call("GET", "/me")
+        return {"account_id": str(data.get("account_id") or ""), "test": bool(data.get("test")),
+                "fiscalization": bool(data.get("fiscalization_enabled") or (data.get("fiscalization") or {}).get("enabled")),
+                "status": data.get("status") or "", "payment_methods": list(data.get("payment_methods") or [])}
+
     def get_payment(self, payment_id):
         data = self._call("GET", f"/payments/{payment_id}")
         return {"id": data.get("id"), "status": data.get("status"), "paid": bool(data.get("paid")),

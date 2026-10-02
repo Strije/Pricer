@@ -253,7 +253,7 @@
         </div>
       </div>
       <div class="offers">${shown.map((o) => `<div class="offer${o.internal_offer_id && Object.values(S.highlights).some((i) => S.offers[i] === o) ? " best" : ""}">
-          <span class="o-prov purchase">${esc(o.provider || "")}${typeof relBadge === "function" ? relBadge(o.provider) : ""}<span class="note"> ${esc(o.warehouse || "")}</span></span>
+          <span class="o-prov purchase">${o.site_url ? `<a class="link" target="_blank" rel="noopener" href="${esc(o.site_url)}" title="Открыть этот артикул на сайте поставщика">${esc(o.provider || "")} ↗</a>` : esc(o.provider || "")}${typeof relBadge === "function" ? relBadge(o.provider) : ""}<span class="note"> ${esc(o.warehouse || "")}</span></span>
           <span class="o-qty" title="В наличии" data-term=" · ${esc(days(o.delivery_hours))}">${o.available_quantity ?? "—"}${o.availability_is_lower_bound ? "+" : ""} шт</span>
           <span class="o-term">${days(o.delivery_hours)}</span>
           <span class="o-ret">${noReturn(o)}</span>

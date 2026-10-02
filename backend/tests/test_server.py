@@ -263,3 +263,49 @@ def test_change_password_closes_other_sessions(app_factory):
     assert first.get("/api/me").status_code == 200  # свой вход остаётся
     assert second.get("/api/me").status_code == 401  # другие — закрыты
     assert make_client().post("/api/auth/login", headers=H, json={"email": "pw@example.com", "password": "newpassword1"}).status_code == 200
+
+
+def test_services_check_and_site_links(app_factory, monkeypatch):
+    """Сервисы: проверка ЮKassa («информация о магазине») и Laximo; ссылка поиска на сайте поставщика."""
+    import requests
+
+    from laximo import LaximoClient, LaximoError
+
+    make_client, _ = app_factory
+    client = register(make_client(), "svc@example.com", org="Сервисы")
+    assert client.post("/api/services/yookassa/check", headers=H).status_code == 404  # не подключена
+    yk = client.post("/api/suppliers", headers=H, json={"section": "yookassa", "config": {"shop_id": "1", "receipts": True},
+                                                         "secrets": {"secret_key": "live_x"}}).json()
+
+    class Me:
+        status_code = 200
+
+        def json(self):
+            return {"account_id": "1", "test": False, "fiscalization_enabled": False, "status": "enabled"}
+
+    class S:
+        def request(self, *a, **k):
+            return Me()
+    monkeypatch.setattr(requests, "Session", lambda: S())
+    status = client.post("/api/services/yookassa/check", headers=H).json()
+    assert status["ok"] is False and "чеки" in status["message"]  # в Pricer чеки включены, в ЮKassa — нет
+    client.put(f"/api/suppliers/{yk['id']}", headers=H, json={"config": {"shop_id": "1", "receipts": False}, "secrets": {}})
+    assert client.post("/api/services/yookassa/check", headers=H).json()["ok"] is True
+
+    client.post("/api/suppliers", headers=H, json={"section": "laximo", "secrets": {"login": "L", "password": "P"}})
+
+    def denied(self, query):
+        raise LaximoError("доступ запрещён")
+    monkeypatch.setattr(LaximoClient, "find_vehicle", denied)
+    assert client.post("/api/services/laximo/check", headers=H).json() == {**client.post("/api/services/laximo/check", headers=H).json(), "ok": False}
+
+    from app.search import offer_view
+
+    class E:
+        site_links = {"Rossko": "https://rossko.ru/search?text={article}"}
+
+        def apply_markup(self, price):
+            return price, 0, 0
+    row = offer_view({"provider": "Rossko", "article": "W712/95", "purchase_price": 1}, E())
+    assert row["site_url"] == "https://rossko.ru/search?text=W712/95"
+    assert "site_url" not in offer_view({"provider": "Rossko", "article": "1", "purchase_price": 1}, E(), customer=True)
