@@ -70,7 +70,21 @@ https://109-73-199-217.sslip.io, nginx → 127.0.0.1:8095, systemd `pricer.servi
 ```
 backend/
   app/                      веб-приложение (FastAPI)
-    server.py               create_app(): все эндпоинты, build_engine, фоновые потоки (~2300 строк)
+    server.py               create_app(): общее окружение — база, ключи, движки организаций (build_engine,
+                            engine_for), вход (current_user/admin_user/staff_user), CSRF; подключает routes/
+    routes/                 эндпоинты по разделам, в каждом setup(app, ctx); ctx — окружение из create_app,
+                            помощники для других разделов модуль кладёт в ctx (порядок — в server.py)
+      auth.py               регистрация, вход, пароль, /api/me, /health, каталог
+      suppliers.py          поставщики и сервисы, проверки, импорт settings.json, настройки организации
+      search.py             задачи и SSE (start_job, /api/jobs/{id}/events), /api/find, избранное
+      prices.py             прайс-листы и поток price_watch
+      orders.py             файл заказа, заказы, замена позиции
+      clients.py  cart.py   клиенты и машины; корзина и оформление (order_from_cart)
+      quotes.py             подборы, страница клиента, ЮKassa и поток payment_watch, «ТО по машине»
+      lines.py              позиции у поставщиков, статусы (фоновый поток), уведомления
+      vin.py                Laximo
+      common.py             константы, Job, представления заказов и предложений
+    schemas.py              схемы запросов (pydantic)
     db.py                   модели SQLAlchemy 2 и add_missing_columns
     security.py             пароли (scrypt), SecretBox (Fernet), LoginLimiter
     search.py               выдача: offer_view, бренд голосованием (choose_brand), гарантии, подсветки
@@ -157,7 +171,9 @@ docs/MIGRATION_PLAN.md      план, решения, статус по этап
 
 ## Известный техдолг
 
-- `server.py` и `index.html` слишком большие — разбить на роутеры и JS-модули.
+- `index.html` слишком большой — разнести встроенный JS по модулям.
+- Перед ролями (менеджер / покупатель): почти все эндпоинты проверяют только вход (`current_user`),
+  а не роль — пройти по ним и решить, что доступно покупателю (сейчас роль `customer` не выдаётся).
 - Нет Alembic; связь части данных хранится в JSON-полях.
 - Прайс читается построчно и пишется пачками, но скачанный файл (и XLSX для openpyxl) целиком в памяти —
   файлы больше ~200 МБ стоит качать во временный файл.
