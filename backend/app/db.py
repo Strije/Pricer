@@ -93,6 +93,14 @@ class SubmissionLog(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Cart(Base):
+    """Корзина пользователя (в десктопе — DraftCart в памяти окна): строки в формате DraftCart."""
+    __tablename__ = "carts"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    entries: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 def make_sessionmaker(url):
     kwargs = {"json_serializer": lambda obj: json.dumps(obj, ensure_ascii=False)}
     if url.startswith("sqlite"):

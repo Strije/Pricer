@@ -64,6 +64,7 @@
   td select { max-width: 280px; }
   .hide-purchase .purchase { display: none; }
   .hidden { display: none !important; }
+  .cartbtn { background: var(--accent-soft); color: var(--accent); padding: 5px 12px; font-size: 13px; }
   .auth { max-width: 380px; margin: 48px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
   .auth h2 { margin: 0 0 14px; font-size: 18px; }
   .auth label { margin-bottom: 10px; } .auth input { width: 100%; }
@@ -93,7 +94,7 @@
 <header>
   <h1>Pricer</h1><span class="sub">проценка по всем поставщикам</span>
   <span class="badge" id="replay" hidden>демонстрация на записанных ответах</span>
-  <span class="user hidden" id="userbox"><span id="who"></span><button class="link" id="logout">Выйти</button></span>
+  <span class="user hidden" id="userbox"><button class="cartbtn" id="cart-badge" title="Корзина">🛒 <span id="cart-count">0</span> · <span id="cart-sum">0</span> ₽</button><span id="who"></span><button class="link" id="logout">Выйти</button></span>
 </header>
 <section class="auth hidden" id="auth">
   <h2 id="auth-title">Вход</h2>
@@ -114,6 +115,7 @@
     <button class="tab active" data-tab="search">Поиск</button>
     <button class="tab" data-tab="file">Заказ из файла</button>
     <button class="tab" data-tab="orders">Заказы</button>
+    <button class="tab" data-tab="cart">Корзина</button>
     <button class="tab" data-tab="suppliers">Поставщики</button>
   </nav>
   <section id="tab-search">
@@ -147,7 +149,7 @@
       <thead><tr>
         <th>Поставщик</th><th>Бренд</th><th>Артикул</th><th>Наименование</th><th>Склад</th>
         <th class="num">Наличие</th><th class="num">Срок</th>
-        <th class="num purchase">Закупка, ₽</th><th class="num">Продажа, ₽</th>
+        <th class="num purchase">Закупка, ₽</th><th class="num">Продажа, ₽</th><th>В корзину</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -214,6 +216,25 @@
       </div>
       <details style="margin-top:10px"><summary class="note">Журнал отправок</summary><div id="ord-log" class="note"></div></details>
     </div>
+  </section>
+  <section id="tab-cart" class="hidden">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Поставщик</th><th>Бренд</th><th>Артикул</th><th>Наименование</th><th>Склад</th><th class="num">Срок</th>
+          <th class="num">Кол-во</th><th class="num purchase">Закупка</th><th class="num">Продажа</th><th class="num">Сумма</th><th>Статус</th><th></th></tr></thead>
+        <tbody id="cart-rows"></tbody>
+      </table>
+    </div>
+    <div class="toolbar"><span class="muted" id="cart-total"></span><button class="danger" id="cart-clear">Очистить корзину</button></div>
+    <form class="panel row" id="cart-order">
+      <label>Клиент <input id="co-client" required></label>
+      <label>Менеджер <input id="co-manager"></label>
+      <label>Дата отгрузки <input id="co-date" type="date"></label>
+      <label>VIN <input id="co-vin" maxlength="30"></label>
+      <label style="flex:1 1 200px">Комментарий <input id="co-comment"></label>
+      <button>Оформить заказ</button>
+      <span class="msg" id="co-msg"></span>
+    </form>
   </section>
   <section id="tab-suppliers" class="hidden">
     <div class="panel">
@@ -286,6 +307,7 @@ async function boot() {
     $("who").textContent = `${me.organization} · ${me.email}`;
     $("auth").classList.add("hidden"); $("app").classList.remove("hidden"); $("userbox").classList.remove("hidden");
     renderChips(me.providers, {});
+    api("/api/cart").then(renderCartBadge).catch(() => {});
     catalog = await api("/api/catalog");
     $("add-section").innerHTML = Object.entries(catalog).map(([k, v]) => `<option value="${k}">${esc(v.title)}</option>`).join("");
   } catch (e) { showAuth(); }
@@ -302,9 +324,10 @@ $("auth-form").addEventListener("submit", async (e) => {
 $("logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}).catch(() => {}); showAuth(); };
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  for (const name of ["search", "file", "orders", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
+  for (const name of ["search", "file", "orders", "cart", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "suppliers") loadSuppliers();
   if (t.dataset.tab === "orders") loadOrders();
+  if (t.dataset.tab === "cart") loadCart();
 });
 
 async function loadSuppliers() {
@@ -382,6 +405,7 @@ $("form").addEventListener("submit", async (e) => {
   const started = performance.now();
   try {
     const {job_id, providers} = await api("/api/search", {method: "POST", body});
+    lastSearchJob = job_id;
     const states = {}; renderChips(providers, states);
     const es = new EventSource(`/api/search/${job_id}/events`);
     es.addEventListener("provider", (ev) => { const s = JSON.parse(ev.data); states[s.provider] = s; renderChips(providers, states); });
@@ -410,7 +434,10 @@ function render(res, seconds) {
       <td class="name">${esc(r.name)}</td><td>${esc(r.warehouse)}</td>
       <td class="num">${r.available_quantity ?? "—"}</td><td class="num">${days(r.delivery_hours)}</td>
       <td class="num purchase">${money(r.price)}</td><td class="num">${money(r.sale_price)}</td>
+      <td><span class="row" style="flex-wrap:nowrap;gap:4px"><input type="number" min="1" value="${r.actual_order_quantity || 1}" style="width:64px" data-qty="${esc(r.internal_offer_id)}">
+        <button class="secondary" data-add="${esc(r.internal_offer_id)}" title="В корзину">+</button></span></td>
     </tr>`).join("");
+  document.querySelectorAll("[data-add]").forEach((b) => b.onclick = () => addToCart(b.dataset.add, b));
   $("wrap").hidden = rows.length === 0;
 }
 
@@ -555,6 +582,50 @@ $("ord-submit").onclick = async () => {
   } catch (err) { $("ord-msg").textContent = err.message; }
   $("ord-submit").disabled = currentOrder && currentOrder.status === "sent"; loadOrders();
 };
+
+// ---------- корзина ----------
+let lastSearchJob = null;
+function renderCartBadge(cart) {
+  $("cart-count").textContent = cart.positions; $("cart-sum").textContent = money(cart.sale_total);
+}
+async function addToCart(offerId, button) {
+  const qty = Number(document.querySelector(`[data-qty="${CSS.escape(offerId)}"]`).value) || 1;
+  try {
+    const cart = await api("/api/cart", {method: "POST", body: {job_id: lastSearchJob, internal_offer_id: offerId, quantity: qty}});
+    renderCartBadge(cart); button.textContent = "✓"; setTimeout(() => button.textContent = "+", 1200);
+    if (cart.message) $("count").textContent = cart.message;
+  } catch (err) { $("count").textContent = "Корзина: " + err.message; }
+}
+async function loadCart() {
+  const cart = await api("/api/cart"); renderCartBadge(cart);
+  $("cart-rows").innerHTML = cart.entries.length ? cart.entries.map((e) => `<tr>
+    <td>${esc(e.item.provider)}</td><td>${esc(e.item.display_brand || e.item.brand)}</td><td>${esc(e.item.article)}${e.item.is_cross ? '<span class="an">АН</span>' : ""}</td>
+    <td class="name">${esc(e.item.name)}${e.variants > 1 ? `<div class="note">вариантов для замены: ${e.variants - 1}</div>` : ""}</td>
+    <td>${esc(e.item.warehouse || "")}</td><td class="num">${days(e.item.delivery_hours)}</td>
+    <td class="num"><input type="number" min="1" value="${e.qty}" style="width:70px" data-cart-qty="${esc(e.key)}"></td>
+    <td class="num purchase">${money(e.item.price)}</td><td class="num">${money(e.item.sale_price)}</td><td class="num">${money(e.item.sale_price * e.qty)}</td>
+    <td><span class="st muted">${esc(e.status)}</span></td><td><button class="link" data-cart-del="${esc(e.key)}">убрать</button></td></tr>`).join("")
+    : '<tr><td colspan="12" class="muted">Корзина пуста — добавляйте предложения кнопкой «+» на вкладке «Поиск»</td></tr>';
+  $("cart-total").textContent = cart.positions ? `Позиций: ${cart.positions}, штук: ${cart.quantity} · закупка ${money(cart.purchase_total)} ₽ · продажа ${money(cart.sale_total)} ₽` : "";
+  $("cart-order").hidden = !cart.positions; $("cart-clear").hidden = !cart.positions;
+  document.querySelectorAll("[data-cart-qty]").forEach((inp) => inp.onchange = async () => {
+    try { await api(`/api/cart/${encodeURIComponent(inp.dataset.cartQty)}`, {method: "PUT", body: {quantity: Number(inp.value) || 1}}); }
+    catch (err) { $("co-msg").textContent = err.message; }
+    loadCart();
+  });
+  document.querySelectorAll("[data-cart-del]").forEach((b) => b.onclick = async () => { await api(`/api/cart/${encodeURIComponent(b.dataset.cartDel)}`, {method: "DELETE"}); loadCart(); });
+}
+$("cart-badge").onclick = () => document.querySelector('[data-tab="cart"]').click();
+$("cart-clear").onclick = async () => { if (confirm("Очистить корзину?")) { await api("/api/cart", {method: "DELETE"}); loadCart(); } };
+$("cart-order").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api("/api/cart/checkout", {method: "POST", body: {client: $("co-client").value.trim(), manager: $("co-manager").value.trim(),
+      ship_date: $("co-date").value, vin: $("co-vin").value.trim(), comment: $("co-comment").value.trim()}});
+    $("co-msg").textContent = ""; loadCart();
+    document.querySelector('[data-tab="orders"]').click(); openOrder(r.order.order_id);
+  } catch (err) { $("co-msg").className = "msg"; $("co-msg").textContent = err.message; }
+});
 </script>
 </body>
 </html>

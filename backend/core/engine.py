@@ -158,6 +158,15 @@ class ProcurementEngine:
     def _refresh_article_suggestion_orders(self, orders):
         pass
 
+    def _refresh_draft_cart_table(self):
+        pass
+
+    def _update_draft_cart_summary(self):
+        pass
+
+    def _refresh_pricing_cart_marks(self):
+        pass
+
     def _order_action_finished(self, order, message):
         self._log(message)
         if self.on_order_action:
@@ -917,6 +926,184 @@ class ProcurementEngine:
             )
         )
 
+    def _cart_status_text(self, item):
+        provider = str(item.get("provider") or "")
+        q_info = self._quantity_info(item, item.get("actual_order_quantity") or 1)
+        if not q_info.can_order:
+            return "Нельзя заказать"
+        missing = self._missing_cart_fields(provider, item)
+        if missing:
+            return "Нет данных"
+        state, _ = self._provider_cart_state(provider)
+        if state == "order":
+            return "Создаст заказ"
+        if state == "cart":
+            return "Корзина поставщика"
+        if state == "local":
+            return "Локально"
+        return "Нет данных"
+
+    def _draft_cart_entry_for_item(self, item):
+        if not hasattr(self, "draft_cart"):
+            return None
+        key = self._cart_key(item or {})
+        for entry in self.draft_cart.rows():
+            if str(entry.get("key") or "") == key:
+                return entry
+        return None
+
+    def _selection_group_offers_for_cart(self, selected_item, requested_quantity):
+        selected_item = dict(selected_item or {})
+        rows = []
+        seen = set()
+
+        def add_candidate(candidate, display_in_order):
+            snapshot = self._selection_group_offer_snapshot(candidate, requested_quantity)
+            if not snapshot:
+                return
+            snapshot["display_in_order"] = bool(display_in_order)
+            key = self._selection_group_offer_key(snapshot)
+            if not key or key in seen:
+                return
+            seen.add(key)
+            rows.append(snapshot)
+
+        add_candidate(selected_item, True)
+        for offer in selected_item.get("group_offers") or []:
+            add_candidate(offer, False)
+            if len(rows) >= DRAFT_GROUP_OFFER_LIMIT:
+                return rows
+        for offer in self._displayed_group_candidates(selected_item):
+            add_candidate(offer, False)
+            if len(rows) >= DRAFT_GROUP_OFFER_LIMIT:
+                break
+        return rows
+
+    def _selection_group_offer_snapshot(self, item, requested_quantity):
+        offer = dict(item or {})
+        if not offer:
+            return None
+        offer.pop("group_offers", None)
+        offer.pop("selection_group_offers", None)
+        if not offer.get("internal_offer_id"):
+            self.normalize_offer_item(offer, requested_quantity)
+        info = self._quantity_info(offer, requested_quantity)
+        if not info.can_order:
+            return None
+        actual_quantity = info.actual_int()
+        offer["requested_quantity"] = int(info.requested_quantity)
+        offer["available_quantity"] = info.available_int() if info.available_quantity is not None else None
+        offer["minimum_quantity"] = int(info.minimum_quantity)
+        offer["quantity_step"] = int(info.quantity_step)
+        offer["actual_order_quantity"] = actual_quantity
+        self._apply_sale_price(offer)
+        return offer
+
+    def _displayed_group_candidates(self, selected_item):
+        selected_source_article = self.clean_num(selected_item.get("source_code") or "")
+        selected_source_brand = str(selected_item.get("source_brand") or "").strip()
+        selected_group = self._group_id(selected_item)
+        for item in getattr(self, "displayed_data", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if selected_source_article:
+                item_source_article = self.clean_num(item.get("source_code") or "")
+                if item_source_article != selected_source_article:
+                    continue
+                item_source_brand = str(item.get("source_brand") or "").strip()
+                if (
+                    selected_source_brand
+                    and item_source_brand
+                    and not self.same_brand_group(item_source_brand, selected_source_brand)
+                ):
+                    continue
+                yield item
+                continue
+            if self._group_id(item) == selected_group:
+                yield item
+
+    def _selection_group_offer_key(self, item):
+        internal_offer_id = str(item.get("internal_offer_id") or "").strip()
+        if internal_offer_id:
+            return ("internal", internal_offer_id)
+        provider = str(item.get("provider_name") or item.get("provider") or "").strip()
+        supplier_offer_id = str(item.get("supplier_offer_id") or "").strip()
+        if provider and supplier_offer_id:
+            return ("supplier", provider, supplier_offer_id)
+        return (
+            "natural",
+            provider,
+            self.brand_group_key(item.get("brand", "")),
+            self.clean_num(item.get("article", "")),
+            str(item.get("warehouse") or item.get("logo") or "").strip(),
+            str(item.get("purchase_price", item.get("price", ""))).replace(" ", "").replace(",", "."),
+        )
+
+    def _add_item_to_draft_cart(self, item, qty):
+        item = dict(item)
+        info = self._quantity_info(item, qty)
+        if not info.can_order:
+            self.add_log(
+                f"ОШИБКА: нельзя заказать {item.get('brand', '')} {item.get('article', '')}: {info.reason}"
+            )
+            return
+        qty = info.actual_int()
+        stock = self._quantity_limit_for_cart(info)
+        if not item.get("internal_offer_id"):
+            self.normalize_offer_item(item, qty)
+        item["requested_quantity"] = int(info.requested_quantity)
+        item["available_quantity"] = info.available_int() if info.available_quantity is not None else None
+        item["minimum_quantity"] = int(info.minimum_quantity)
+        item["quantity_step"] = int(info.quantity_step)
+        item["actual_order_quantity"] = qty
+        item["source_name"] = str(item.get("source_name") or item.get("name") or "")
+        self._mark_offer_checked_now(item)
+        group_offers = self._selection_group_offers_for_cart(item, qty)
+        if len(group_offers) > 1:
+            item["selection_group_offers"] = group_offers
+            item["selection_group_offer_count"] = len(group_offers)
+            item["selection_group_visible_offer_count"] = sum(
+                1 for offer in group_offers if offer.get("display_in_order")
+            )
+        else:
+            item.pop("selection_group_offers", None)
+            item["selection_group_offer_count"] = 1
+            item["selection_group_visible_offer_count"] = 1
+        key = self._cart_key(item)
+        existing_entry = self._draft_cart_entry_for_item(item)
+        cart_state, _ = self._provider_cart_state(item.get("provider", ""))
+        if cart_state == "order":
+            added_qty = self.draft_cart.set_quantity(key, item, qty, stock)
+        else:
+            added_qty = self.draft_cart.add(key, item, qty, stock)
+        self._refresh_draft_cart_table()
+        self._update_draft_cart_summary()
+        self._refresh_pricing_cart_marks()
+        if added_qty > 0:
+            if existing_entry and cart_state == "order":
+                self.add_log(f"В корзине обновлено: {item.get('brand', '')} {item.get('article', '')} x{qty}")
+            else:
+                self.add_log(f"В корзину добавлено: {item.get('brand', '')} {item.get('article', '')} x{added_qty}")
+        elif existing_entry:
+            self.add_log(self._existing_cart_entry_log_text(existing_entry))
+        elif cart_state == "order":
+            self.add_log(f"В корзине уже есть эта позиция для заказа: {item.get('brand', '')} {item.get('article', '')}")
+        else:
+            self.add_log(f"В корзине уже максимум по остатку: {item.get('brand', '')} {item.get('article', '')}")
+
+    def _existing_cart_entry_log_text(self, entry):
+        item = dict((entry or {}).get("item") or {})
+        qty = int((entry or {}).get("qty") or 0)
+        try:
+            purchase_price = float(item.get("purchase_price", item.get("price") or 0) or 0)
+        except (TypeError, ValueError):
+            purchase_price = 0.0
+        sale_price, _, _ = self.apply_markup(purchase_price)
+        return (
+            f"В корзине уже есть: {item.get('brand', '')} {item.get('article', '')} "
+            f"x{qty}, продажа {sale_price * qty:.2f} р."
+        )
+
     def _order_entries_with_prices(self, entries):
         prepared = []
         for entry in entries or []:
@@ -968,19 +1155,6 @@ class ProcurementEngine:
                 return ""
             checked.append(checked_at)
         return min(checked) if checked else ""
-
-    def _mark_order_summary_stale_if_expired(self, summary):
-        summary = dict(summary or {})
-        if (
-            str(summary.get("status") or "") not in ("sent",)
-            and str(summary.get("verification_status") or "") == "valid"
-            and self._verification_expired(str(summary.get("verified_at") or ""))
-        ):
-            full_order = self.order_store.read(summary.get("order_id"))
-            if full_order:
-                full_order = self._mark_order_stale_if_expired(full_order, update_store=True)
-                return self.order_store.summary_from_order(full_order)
-        return summary
 
     def _mark_order_stale_if_expired(self, order, update_store=False):
         order = dict(order or {})
@@ -2831,6 +3005,12 @@ class ProcurementEngine:
                     result_count=len(res),
                 )
         return res, elapsed, False
+
+    def _group_id(self, item):
+        return (
+            self.brand_group_key(item.get("brand", "")),
+            self.clean_num(item.get("article", "")),
+        )
 
     def apply_markup(self, price):
         price = float(price)

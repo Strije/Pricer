@@ -11,10 +11,14 @@ ROOTS = [
     "_recheck_order_thread", "_submit_order_thread_guarded", "_submittable_order_items",
     "_mark_order_stale_if_expired", "_order_submit_idempotency_key", "_try_lock_order_submit",
     "_skip_order_item", "_restore_order_item", "_replace_order_item_with_variant",
+    # корзина: добавление с запасом вариантов, статус позиции
+    "_add_item_to_draft_cart", "_cart_status_text",
 ]
 # Методы интерфейса: вместо них в движке свои реализации (см. шапку класса ниже).
-UI_METHODS = {"add_log", "_refresh_orders_page", "_refresh_article_suggestion_orders"}
-graph = subprocess.run([sys.executable, f"{S}/callgraph.py", f"{S}/src/main.py", *ROOTS],
+UI_METHODS = {"add_log", "_refresh_orders_page", "_refresh_article_suggestion_orders",
+              "_refresh_draft_cart_table", "_update_draft_cart_summary", "_refresh_pricing_cart_marks"}
+graph = subprocess.run([sys.executable, f"{S}/callgraph.py", f"{S}/src/main.py", *ROOTS,
+                        "--stop=" + ",".join(sorted(UI_METHODS))],
                        capture_output=True, text=True).stdout
 names = [l.split()[2] for l in graph.splitlines() if l.strip() and l.split()[0].isdigit()]
 names = [n for n in names if n not in UI_METHODS]
@@ -150,6 +154,15 @@ class ProcurementEngine:
         pass
 
     def _refresh_article_suggestion_orders(self, orders):
+        pass
+
+    def _refresh_draft_cart_table(self):
+        pass
+
+    def _update_draft_cart_summary(self):
+        pass
+
+    def _refresh_pricing_cart_marks(self):
         pass
 
     def _order_action_finished(self, order, message):
