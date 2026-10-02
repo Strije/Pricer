@@ -79,3 +79,30 @@ def test_quote_validation_and_isolation(app_factory):  # noqa: F811
     other = register(make_client(), "quote-other@example.com", org="Чужой подбор")
     assert other.get(f"/api/quotes/{quote['id']}").status_code == 404
     assert other.get("/api/quotes").json() == []
+
+
+def test_service_template_quote(app_factory, monkeypatch):  # noqa: F811
+    """«ТО по машине»: номер из Laximo по названию -> поиск у поставщиков -> три варианта в позицию;
+    пункт, которого нет в каталоге, остаётся пустым для ручного добавления."""
+    from laximo import LaximoClient
+
+    from app import service_template
+
+    make_client, client, _job, _offers = setup(app_factory, "service@example.com")
+    client.post("/api/suppliers", headers=H, json={"section": "laximo", "secrets": {"login": "L", "password": "P"}})
+    catalog = {"Фильтр масляный": [{"name": "Фильтры", "details": [
+        {"name": "Прокладка фильтра масляного", "oem": "X-1"}, {"name": "ФИЛЬТР МАСЛЯНЫЙ", "oem": "162622"}], "units": []}]}
+    monkeypatch.setattr(LaximoClient, "quick_details", lambda self, vehicle, quick_group_id=None, query=None: catalog.get(query, []))
+    r = client.post("/api/quotes/service", headers=H, json={
+        "vehicle": {"catalog": "VW", "vehicleId": "1", "ssd": "s"}, "oem_brand": "ZIC", "title": "ТО Golf",
+        "items": ["Фильтр масляный", "Свечи зажигания"]}).json()
+    events = read_events(client, r["job_id"])
+    done = next(d for k, d in events if k == "done")
+    assert done["filled"] == 1 and done["items"] == 2
+    quote = client.get(f"/api/quotes/{r['quote_id']}").json()
+    oil, plugs = quote["lines"]
+    assert oil["request"] == "Фильтр масляный" and oil["search"] == "162622"
+    assert 1 <= len(oil["variants"]) <= 3 and plugs["variants"] == []
+    assert any(not v["is_cross"] for v in oil["variants"])  # оригинал среди вариантов
+    assert ("item", {"item": "Фильтр масляный", "status": "search", "oem": "162622"}) in events
+    assert service_template.oem_numbers(catalog["Фильтр масляный"], "Фильтр масляный") == ["162622"]  # не прокладка

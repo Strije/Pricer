@@ -245,7 +245,9 @@
     <div id="vin-vehicles" class="row" style="margin-top:8px"></div>
     <div id="vin-catalog" class="hidden" style="margin-top:10px">
       <div class="row"><input id="vin-part" placeholder="деталь по названию: масляный фильтр, колодки…" style="flex:1 1 260px">
-        <button class="secondary" id="vin-part-go">Найти деталь</button></div>
+        <button class="secondary" id="vin-part-go">Найти деталь</button>
+        <button id="vin-service" class="quote-add" title="Фильтры, свечи, колодки по этой машине — сразу вариантами в подбор для клиента">🔧 Подбор ТО</button></div>
+      <div class="note" id="vin-service-msg"></div>
       <div class="row" style="align-items:flex-start;margin-top:8px">
         <div id="vin-groups" style="flex:1 1 280px;max-height:420px;overflow:auto" class="note"></div>
         <div id="vin-details" style="flex:2 1 420px"></div>
@@ -461,6 +463,8 @@
           <input type="number" id="ss-lead" min="1" max="10" step="0.1" style="width:90px"></label>
         <button class="secondary" id="ss-save">Сохранить</button><span class="msg" id="ss-msg"></span>
       </div>
+      <label style="margin-top:10px">Состав «ТО по машине» (по строке на пункт, как в каталоге: «Фильтр масляный»)
+        <textarea id="ss-service" rows="6"></textarea></label>
       <div class="note">Иначе поиск предложит выбрать бренд. Голоса — сколько поставщиков назвали бренд для артикула;
         упоминание бренда в названиях других вариантов («ан. MAHLE OC90») считается ещё одним голосом.</div>
     </details>
@@ -1121,6 +1125,28 @@ async function chooseVehicle(v) {
     document.querySelectorAll("[data-qg]").forEach((b) => b.onclick = () => loadVinDetails({quickGroupId: Number(b.dataset.qg)}));
   } catch (err) { $("vin-groups").textContent = err.message; }
 }
+$("vin-service").onclick = async () => {
+  const v = vinVehicle, box = $("vin-service-msg");
+  $("vin-service").disabled = true;
+  try {
+    const title = `ТО: ${v.brand} ${v.name}${v.year ? " " + v.year : ""}`;
+    const r = await api("/api/quotes/service", {method: "POST", body: {vehicle: {catalog: v.catalog, vehicleId: v.vehicleId, ssd: v.ssd}, oem_brand: v.oem_brand, title}});
+    const state = Object.fromEntries(r.items.map((i) => [i, "ждёт"]));
+    const show = () => { box.innerHTML = r.items.map((i) => `${esc(i)} — ${esc(state[i])}`).join(" · "); };
+    show();
+    const LABEL = {catalog: "ищу номер в каталоге…", search: "ищу у поставщиков…", error: "ошибка каталога"};
+    const end = await listenJob(r.job_id, {item: (d) => {
+      state[d.item] = d.status === "done" ? (d.variants ? `${d.variants} вар. (${d.oem})` : d.oem ? `нет предложений (${d.oem})` : "нет в каталоге")
+        : d.status === "search" ? `ищу ${d.oem} у поставщиков…` : LABEL[d.status] || d.status;
+      show();
+    }});
+    if (end.kind === "done") {
+      box.innerHTML += ` <br><strong>Готово: заполнено ${end.data.filled} из ${end.data.items}.</strong> <button class="link" id="vin-service-open">Открыть подбор</button>`;
+      $("vin-service-open").onclick = () => openQuoteTab(end.data.quote);
+    } else box.textContent = "Ошибка: " + (end.data.message || "");
+  } catch (err) { box.textContent = err.message; }
+  $("vin-service").disabled = false;
+};
 $("vin-part-go").onclick = () => loadVinDetails({query: $("vin-part").value.trim()});
 async function loadVinDetails(params) {
   $("vin-details").textContent = "Загружаю детали…";
@@ -1143,6 +1169,7 @@ async function loadSearchSettings() {
     const st = await api("/api/org/settings");
     $("ss-share").value = Math.round(100 * (st.brand_auto_share ?? 0.5));
     $("ss-lead").value = st.brand_auto_lead ?? 1.5;
+    $("ss-service").value = (st.service_template || ["Фильтр масляный", "Фильтр воздушный", "Фильтр салона", "Фильтр топливный", "Свечи зажигания", "Колодки тормозные передние"]).join("\n");
   } catch (e) {}
 }
 $("search-settings").addEventListener("toggle", () => { if ($("search-settings").open) loadSearchSettings(); });
@@ -1150,7 +1177,8 @@ $("ss-save").onclick = async () => {
   const share = Number($("ss-share").value) / 100, lead = Number($("ss-lead").value);
   if (!(share >= 0 && share <= 1) || !(lead >= 1)) { $("ss-msg").textContent = "Доля — от 0 до 100 %, перевес — от 1"; return; }
   try {
-    await api("/api/org/settings", {method: "PUT", body: {brand_auto_share: share, brand_auto_lead: lead}});
+    const service = $("ss-service").value.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 15);
+    await api("/api/org/settings", {method: "PUT", body: {brand_auto_share: share, brand_auto_lead: lead, service_template: service}});
     $("ss-msg").className = "msg ok"; $("ss-msg").textContent = "Сохранено";
   } catch (err) { $("ss-msg").className = "msg"; $("ss-msg").textContent = err.message; }
 };

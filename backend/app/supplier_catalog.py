@@ -91,7 +91,9 @@ ORG_KEYS = ("default_markup", "markup_rules", "rounding_mode", "rounding_from", 
             # порог автовыбора бренда по голосам поставщиков (app/search.py)
             "brand_auto_share", "brand_auto_lead",
             # справочник гарантий брендов организации (по умолчанию — data/brand_warranty.json)
-            "brand_warranty")
+            "brand_warranty",
+            # состав «ТО по машине» (app/service_template.py)
+            "service_template")
 
 # Запасной признак секрета для полей, которых нет в справочнике (на случай новых версий десктопа).
 _SECRET_NAME = re.compile(r"(?i)(key|pass|login|user|token|secret|phone|client_id|contact_name)")

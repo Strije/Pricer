@@ -224,6 +224,15 @@ class VehicleRef(BaseModel):
     ssd: str = Field(max_length=4000)
 
 
+class ServiceQuoteRequest(BaseModel):
+    """«ТО по машине»: машина из каталога Laximo; quote_id — дополнить существующий подбор."""
+    vehicle: VehicleRef
+    oem_brand: str = Field(default="", max_length=60)
+    title: str = Field(default="", max_length=200)
+    quote_id: int | None = None
+    items: list[str] | None = Field(default=None, max_length=15)
+
+
 class VinDetailsRequest(BaseModel):
     vehicle: VehicleRef
     quickGroupId: int | None = None
@@ -1552,6 +1561,47 @@ def create_app(var_dir=None, database_url=None):
                 "positions": len(quote_service.lines(quote)), "comment": request.comment[:200]}))
             session.commit()
             return quote_service.public_view(quote, org.name, _warranty_lookup(org))
+
+    @app.post("/api/quotes/service")
+    def service_quote(request: ServiceQuoteRequest, user=Depends(staff_user)):
+        """«ТО по машине»: по шаблону — номера из Laximo, поиск у поставщиков, три варианта в позицию.
+        Идёт фоном (несколько поисков подряд); прогресс — события item, итог — done с подбором."""
+        from app import service_template
+
+        laximo = laximo_client(user)
+        with Session() as session:
+            org = session.get(db.Organization, user["organization_id"])
+            items = [str(x).strip()[:80] for x in (request.items or []) if str(x).strip()] or \
+                service_template.items_for(org.settings)
+            if request.quote_id:
+                quote = _quote(session, user, request.quote_id)
+            else:
+                quote = db.Quote(organization_id=user["organization_id"], token=quote_service.new_token(),
+                                 title=request.title.strip() or "ТО по машине", created_by=user["id"], data={"lines": []})
+                session.add(quote)
+            session.commit()
+            quote_id = quote.id
+        job = Job(request, user["organization_id"], kind="service")
+        vehicle = {**request.vehicle.model_dump(), "oem_brand": request.oem_brand}
+
+        def work(engine):
+            replay_reset(engine)
+            found = service_template.collect(
+                engine, laximo, vehicle, items,
+                lambda item, status, data=None: job.push("item", {"item": item, "status": status, **(data or {})}))
+            with Session() as session:
+                quote = session.get(db.Quote, quote_id)
+                for item, oem, variants in found:
+                    line = quote_service.add_line(quote, item, 1, search=oem.upper())
+                    for offer in variants:
+                        sale = float(engine.apply_markup(float(offer.get("purchase_price", offer.get("price")) or 0))[0])
+                        quote_service.add_variant(quote, line["id"], offer, sale)
+                session.commit()
+                view = quote_service.manager_view(quote)
+            job.push("done", {"quote": view, "filled": sum(1 for _, _, v in found if v), "items": len(found)})
+
+        start_job(job, work)
+        return {"job_id": job.id, "quote_id": quote_id, "items": items}
 
     # ----- замена варианта позиции (из групп заказа, как кнопка «Выбрать вариант» в десктопе) -----
 

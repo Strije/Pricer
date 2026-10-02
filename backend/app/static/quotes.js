@@ -161,6 +161,11 @@
     });
   }
 
+  window.openQuoteTab = function (quote) {
+    setActive(quote); Q.current = quote;
+    document.querySelector('[data-tab="quotes"]').click();
+  };
+
   // ---------- уведомления: клиент выбрал ----------
   let otherLast = null;
   window.checkOtherNotifications = async function (baseKey) {
