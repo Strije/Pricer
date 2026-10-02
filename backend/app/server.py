@@ -1439,7 +1439,9 @@ def create_app(var_dir=None, database_url=None):
     @app.get("/api/quotes/{quote_id}")
     def get_quote(quote_id: int, user=Depends(staff_user)):
         with Session() as session:
-            return quote_service.manager_view(_quote(session, user, quote_id))
+            quote = _quote(session, user, quote_id)
+            refresh_payment(session, quote)  # ожидает оплаты — спросим ЮKassa сейчас
+            return quote_service.manager_view(quote)
 
     @app.put("/api/quotes/{quote_id}")
     def update_quote(quote_id: int, request: QuoteRequest, user=Depends(staff_user)):
@@ -1953,6 +1955,24 @@ def create_app(var_dir=None, database_url=None):
 
     if refresh_minutes > 0:
         threading.Thread(target=background_refresh, daemon=True, name="status-refresh").start()
+
+    # Оплаты подборов: уведомления ЮKassa не обязательны (адрес уведомлений у магазина один, и его
+    # может занимать сайт на ABCP) — незавершённые платежи последних 2 суток сервер проверяет сам.
+    payment_seconds = float(os.environ.get("PRICER_PAYMENT_CHECK_SECONDS", "0" if replay_mode else "120") or 0)
+
+    def payment_watch():
+        while not stop_background.wait(payment_seconds):
+            try:
+                since = db.utcnow() - datetime.timedelta(days=2)
+                with Session() as session:
+                    for quote in session.query(db.Quote).filter(db.Quote.chosen_at >= since):
+                        if ((quote.data or {}).get("payment") or {}).get("status") == "pending":
+                            refresh_payment(session, quote)
+            except Exception as exc:  # проверка оплат не должна ронять сервис
+                print(f"[pricer] проверка оплат: {type(exc).__name__}: {str(exc)[:200]}")
+
+    if payment_seconds > 0:
+        threading.Thread(target=payment_watch, daemon=True, name="payment-watch").start()
 
     @app.get("/api/supplier-stats")
     def supplier_stats(days: int = 180, user=Depends(current_user)):
