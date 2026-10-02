@@ -37,7 +37,8 @@ _KEYWORDS = [
     ("in_transit", ("в пути", "в доставке", "передан в доставку")),
     ("arrived", ("на склад", "пришл", "пришёл", "пришел", "поступ", "прибыл", "готов к выдаче", "к выдаче")),
     ("in_transit", ("отгружен", "отправлен")),
-    ("confirmed", ("подтвержд", "принят", "в работе", "заказан", "обработ")),
+    ("in_transit", ("задерж",)),  # «Задерживается» (ABCP) — ещё едет
+    ("confirmed", ("подтвержд", "принят", "в работе", "заказан", "обработ", "оформлен", "ожидает оплаты")),
 ]
 
 
@@ -58,7 +59,7 @@ def _parse_dt(value):
 
 def _supplier_ref(item):
     response = item.get("supplier_response") or {}
-    for key in ("order_item_id", "external_order_id", "order_id", "number"):
+    for key in ("order_item_id", "order_number", "external_order_id", "order_id", "number"):
         value = response.get(key)
         if value not in (None, ""):
             return str(value)
@@ -98,6 +99,13 @@ def sync_order(session, organization_id, order):
         ref = _supplier_ref(item)
         if ref and not line.supplier_ref:
             line.supplier_ref = ref
+        response = item.get("supplier_response") or {}
+        if response.get("position_id") and not line.position_id:
+            line.position_id = str(response["position_id"])[:100]
+        snapshot = item.get("snapshot") or {}
+        code = snapshot.get("supplier_code") or item.get("supplier_code")
+        if code and not line.supplier_code:
+            line.supplier_code = str(code)[:100]
         # Статус от отправки меняем только пока поставщик не сообщил ничего дальше отправки.
         if line.status in ("", "submitted", "unknown", "failed") and line.status != status:
             response = item.get("supplier_response") or {}
@@ -218,5 +226,63 @@ def refresh_tradesoft(session, organization_id, provider, provider_name):
     return changed
 
 
-# Поставщики, у которых умеем запрашивать статусы: имя класса провайдера -> функция.
-STATUS_FETCHERS = {"TradesoftProvider": refresh_tradesoft}
+def _abcp_items(data):
+    """Списки ABCP приходят то массивом, то объектом {"0": {...}} (как в приложении Abcp)."""
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        return [x for x in data.values() if isinstance(x, dict)]
+    return []
+
+
+def _key(value):
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def refresh_abcp(session, organization_id, provider, provider_name):
+    """Статусы позиций поставщика на ABCP: заказы клиента (orders) -> позиции по бренду и номеру.
+
+    Позицию сопоставляем по номеру заказа у поставщика (order_number из ответа на оформление),
+    бренду и артикулу; без номера заказа не угадываем.
+    """
+    lines = session.query(db.SupplierLine).filter(
+        db.SupplierLine.organization_id == organization_id, db.SupplierLine.provider == provider_name,
+        db.SupplierLine.closed.is_(False), db.SupplierLine.supplier_ref != "").all()
+    if not lines:
+        return 0
+    by_id, by_full_key, by_key = {}, {}, {}
+    for order in _abcp_items(provider.get_orders(limit=100)):
+        number = str(order.get("number") or "").strip()
+        for position in _abcp_items(order.get("positions")):
+            position_id = str(position.get("positionId") or position.get("id") or "").strip()
+            if position_id:
+                by_id[position_id] = position
+            brand, article = _key(position.get("brand")), _key(position.get("number"))
+            supplier_code = str(position.get("supplierCode") or "").strip()
+            by_full_key.setdefault((number, brand, article, supplier_code), position)
+            by_key.setdefault((number, brand, article), position)
+    changed = 0
+    for line in lines:
+        # Как в десктопе: сначала positionId из ответа на заказ, затем ключ «заказ + бренд + номер +
+        # supplierCode» (_position_key), и только потом бренд и номер внутри того же заказа.
+        position = (by_id.get(line.position_id) if line.position_id else None) \
+            or by_full_key.get((line.supplier_ref, _key(line.brand), _key(line.article), line.supplier_code)) \
+            or by_key.get((line.supplier_ref, _key(line.brand), _key(line.article)))
+        if not position:
+            continue
+        text = str(position.get("status") or "").strip()
+        code = normalize_status(text)
+        if code and (code != line.status or text != line.status_text):
+            add_event(session, line, code, text, source="supplier")
+            changed += 1
+    return changed
+
+
+def fetcher_for(provider):
+    """Функция запроса статусов для поставщика или None, если он статусы не отдаёт."""
+    names = {cls.__name__ for cls in type(provider).__mro__}
+    if "TradesoftProvider" in names:
+        return refresh_tradesoft
+    if "AbcpSupplierProvider" in names and callable(getattr(provider, "get_orders", None)):
+        return refresh_abcp
+    return None

@@ -164,6 +164,22 @@ class ReplaceRequest(BaseModel):
     internal_offer_id: str = Field(min_length=1, max_length=64)
 
 
+class VinFindRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=40)
+
+
+class VehicleRef(BaseModel):
+    catalog: str = Field(max_length=60)
+    vehicleId: str = Field(max_length=60)
+    ssd: str = Field(max_length=4000)
+
+
+class VinDetailsRequest(BaseModel):
+    vehicle: VehicleRef
+    quickGroupId: int | None = None
+    query: str | None = Field(default=None, max_length=100)
+
+
 class ItemsRequest(BaseModel):
     items: list[int] | None = None  # None — все позиции заказа
     confirm: bool = False
@@ -297,8 +313,10 @@ def create_app(var_dir=None, database_url=None):
     def org_settings(session, organization_id):
         org = session.get(db.Organization, organization_id)
         accounts = [(a.section, a.config, box.open(a.secrets_sealed)) for a in org.accounts]
-        if replay_mode and not accounts:
-            return demo_settings
+        suppliers = [a for a in accounts if not catalog.CATALOG.get(a[0], {}).get("service")]
+        if replay_mode and not suppliers:
+            # служебные подключения (Laximo) не поставщики: демо-поставщики остаются
+            return {**demo_settings, **{section: {**config, **secrets} for section, config, secrets in accounts}}
         return catalog.compose_settings(org.settings or {}, accounts)
 
     def invalidate(organization_id):
@@ -1141,10 +1159,10 @@ def create_app(var_dir=None, database_url=None):
             report = []
             for provider in engine.providers:
                 cls = type(provider).__name__
-                fetch = lines_service.STATUS_FETCHERS.get(cls)
+                fetch = lines_service.fetcher_for(provider)
                 if not fetch:
                     continue
-                name = PROVIDER_DISPLAY_NAMES.get(cls, cls)
+                name = PROVIDER_DISPLAY_NAMES.get(cls, getattr(provider, "DISPLAY_NAME", cls))
                 with Session() as session:
                     try:
                         changed = fetch(session, job.organization_id, provider, name)
@@ -1163,6 +1181,55 @@ def create_app(var_dir=None, database_url=None):
         sync_all_lines(user["organization_id"])
         with Session() as session:
             return lines_service.stats(session, user["organization_id"], days=max(1, min(days, 3650)))
+
+    # ----- подбор по VIN / госномеру (Laximo, перенесено из приложения Strije/Abcp) -----
+
+    def laximo_client(user):
+        from laximo import LaximoClient
+
+        with Session() as session:
+            account = session.query(db.SupplierAccount).filter_by(
+                organization_id=user["organization_id"], section="laximo").first()
+            secrets = box.open(account.secrets_sealed) if account else {}
+        if not (account and (account.config or {}).get("enabled", True) and secrets.get("login") and secrets.get("password")):
+            raise HTTPException(status_code=400, detail="подключите каталог Laximo на вкладке «Поставщики»")
+        return LaximoClient(secrets["login"], secrets["password"])
+
+    def laximo_call(fn):
+        from laximo import LaximoError
+
+        try:
+            return fn()
+        except LaximoError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.post("/api/vin/find")
+    def vin_find(request: VinFindRequest, user=Depends(current_user)):
+        from laximo import oem_brand_for, vehicle_year
+
+        client = laximo_client(user)
+        cache = state.setdefault("vin_cache", {})
+        key = (user["organization_id"], request.query.strip().upper())
+        cached = cache.get(key)
+        if cached and time.time() - cached[0] < 3600:  # Laximo ограничивает число запросов
+            plate, vehicles = cached[1]
+        else:
+            plate, vehicles = laximo_call(lambda: client.find_vehicle(request.query))
+            cache[key] = (time.time(), (plate, vehicles))
+        return {"plate": plate, "vehicles": [{**v, "year": vehicle_year(v), "oem_brand": oem_brand_for(v["brand"])}
+                                             for v in vehicles]}
+
+    @app.post("/api/vin/groups")
+    def vin_groups(vehicle: VehicleRef, user=Depends(current_user)):
+        client = laximo_client(user)
+        return laximo_call(lambda: client.quick_groups(vehicle.model_dump())) or {}
+
+    @app.post("/api/vin/details")
+    def vin_details(request: VinDetailsRequest, user=Depends(current_user)):
+        if request.quickGroupId is None and not request.query:
+            raise HTTPException(status_code=400, detail="выберите группу или введите название детали")
+        client = laximo_client(user)
+        return laximo_call(lambda: client.quick_details(request.vehicle.model_dump(), request.quickGroupId, request.query))
 
     @app.get("/api/jobs/{job_id}/events")
     @app.get("/api/search/{job_id}/events")

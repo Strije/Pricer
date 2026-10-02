@@ -69,6 +69,11 @@ CATALOG = {
         "title": "Справочник ABCP",
         "fields": [("host", "Адрес API", "text"), ("login", "Логин", "secret"), ("password", "Пароль", "secret")],
     },
+    "laximo": {
+        "title": "Каталог Laximo (подбор по VIN и госномеру)",
+        "service": True,  # не поставщик: в поиске цен не участвует
+        "fields": [("login", "Логин Laximo", "secret"), ("password", "Пароль Laximo", "secret")],
+    },
     "url_csv": {
         "title": "Прайс-листы по ссылкам",
         # Адреса прайсов часто содержат логин и пароль FTP или токен, поэтому они секретные.

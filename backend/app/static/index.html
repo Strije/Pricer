@@ -121,6 +121,21 @@
     <button class="tab" data-tab="suppliers">Поставщики</button>
   </nav>
   <section id="tab-search">
+  <details class="panel" id="vin-panel"><summary><strong>Подбор по VIN, номеру кузова или госномеру</strong> <span class="note">каталог Laximo</span></summary>
+    <div class="row" style="margin-top:10px">
+      <input id="vin-q" placeholder="WVWZZZ1KZCW000001 или Н207ВН154" style="flex:1 1 260px">
+      <button class="secondary" id="vin-go">Найти машину</button><span class="msg" id="vin-msg"></span>
+    </div>
+    <div id="vin-vehicles" class="row" style="margin-top:8px"></div>
+    <div id="vin-catalog" class="hidden" style="margin-top:10px">
+      <div class="row"><input id="vin-part" placeholder="деталь по названию: масляный фильтр, колодки…" style="flex:1 1 260px">
+        <button class="secondary" id="vin-part-go">Найти деталь</button></div>
+      <div class="row" style="align-items:flex-start;margin-top:8px">
+        <div id="vin-groups" style="flex:1 1 280px;max-height:420px;overflow:auto" class="note"></div>
+        <div id="vin-details" style="flex:2 1 420px"></div>
+      </div>
+    </div>
+  </details>
   <form id="form">
     <label>Бренд <input id="brand" required value="MANN" autocomplete="off"></label>
     <label>Артикул <input id="article" required value="W712/95" autocomplete="off"></label>
@@ -873,6 +888,49 @@ async function showVariants(index) {
       renderOrder(r.order); loadOrders();
     } catch (err) { $("ord-msg").textContent = err.message; }
   };
+}
+
+// ---------- подбор по VIN / госномеру (Laximo) ----------
+let vinVehicle = null;
+$("vin-go").onclick = async () => {
+  $("vin-msg").className = "msg"; $("vin-msg").textContent = "Ищу машину…"; $("vin-vehicles").innerHTML = ""; $("vin-catalog").classList.add("hidden");
+  try {
+    const r = await api("/api/vin/find", {method: "POST", body: {query: $("vin-q").value.trim()}});
+    $("vin-msg").textContent = r.vehicles.length ? (r.plate ? `Госномер ${r.plate}` : "") : "Машина не найдена";
+    $("vin-vehicles").innerHTML = r.vehicles.map((v, i) => `<button class="secondary" data-veh="${i}" title="${esc(v.attributes.map((a) => `${a.name || a.key}: ${a.value}`).join("\n"))}">
+      ${esc(v.brand)} ${esc(v.name)}${v.year ? " · " + v.year : ""}</button>`).join("");
+    document.querySelectorAll("[data-veh]").forEach((b) => b.onclick = () => chooseVehicle(r.vehicles[Number(b.dataset.veh)]));
+    if (r.vehicles.length === 1) chooseVehicle(r.vehicles[0]);
+  } catch (err) { $("vin-msg").textContent = err.message; }
+};
+async function chooseVehicle(v) {
+  vinVehicle = v; $("vin-catalog").classList.remove("hidden"); $("vin-details").innerHTML = "";
+  $("vin-msg").className = "msg ok"; $("vin-msg").textContent = `${v.brand} ${v.name}${v.year ? ", " + v.year : ""} · оригинал ищем как «${v.oem_brand}»`;
+  $("vin-groups").textContent = "Загружаю узлы…";
+  try {
+    const root = await api("/api/vin/groups", {method: "POST", body: {catalog: v.catalog, vehicleId: v.vehicleId, ssd: v.ssd}});
+    const render = (node) => `<li>${node.quickGroupId != null && !node.children.length ? `<button class="link" data-qg="${node.quickGroupId}">${esc(node.name)}</button>` : esc(node.name)}
+      ${node.children.length ? `<ul>${node.children.map(render).join("")}</ul>` : ""}</li>`;
+    $("vin-groups").innerHTML = root && root.children ? `<ul style="padding-left:16px;margin:0">${root.children.map(render).join("")}</ul>` : "Узлов нет";
+    document.querySelectorAll("[data-qg]").forEach((b) => b.onclick = () => loadVinDetails({quickGroupId: Number(b.dataset.qg)}));
+  } catch (err) { $("vin-groups").textContent = err.message; }
+}
+$("vin-part-go").onclick = () => loadVinDetails({query: $("vin-part").value.trim()});
+async function loadVinDetails(params) {
+  $("vin-details").textContent = "Загружаю детали…";
+  try {
+    const cats = await api("/api/vin/details", {method: "POST", body: {vehicle: {catalog: vinVehicle.catalog, vehicleId: vinVehicle.vehicleId, ssd: vinVehicle.ssd}, ...params}});
+    const rows = [];
+    cats.forEach((c) => { c.details.forEach((d) => rows.push([c.name, "", d])); c.units.forEach((u) => u.details.forEach((d) => rows.push([c.name, u.name, d]))); });
+    $("vin-details").innerHTML = rows.length ? `<table><thead><tr><th>Узел</th><th>Деталь</th><th>Оригинальный номер</th><th></th></tr></thead><tbody>${rows.map(([c, u, d]) =>
+      `<tr><td class="note">${esc(c)}${u ? " / " + esc(u) : ""}</td><td>${esc(d.name)}</td><td>${esc(d.oem || "—")}</td>
+       <td>${d.oem ? `<button class="secondary" data-oem="${esc(d.oem)}">Цены</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+      : '<span class="note">Деталей не найдено. В некоторых узлах детали показываются только на схеме — уточните название.</span>';
+    document.querySelectorAll("[data-oem]").forEach((b) => b.onclick = () => {
+      $("brand").value = vinVehicle.oem_brand; $("article").value = b.dataset.oem;
+      $("form").requestSubmit(); $("form").scrollIntoView({behavior: "smooth"});
+    });
+  } catch (err) { $("vin-details").textContent = err.message; }
 }
 </script>
 </body>

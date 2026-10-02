@@ -138,6 +138,10 @@ class SupplierLine(Base):
     purchase_price: Mapped[float] = mapped_column(default=0.0)
     client_name: Mapped[str] = mapped_column(String(200), default="")
     supplier_ref: Mapped[str] = mapped_column(String(100), default="")  # номер позиции/заказа у поставщика
+    # Ключи десктопа для сопоставления со статусами ABCP: positionId из ответа на заказ и supplierCode
+    # предложения (вместе с брендом и номером — _position_key в abcp_supplier.py).
+    position_id: Mapped[str] = mapped_column(String(100), default="")
+    supplier_code: Mapped[str] = mapped_column(String(100), default="")
     promised_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)  # срок, обещанный при подборе
     submitted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="", index=True)
@@ -176,4 +180,38 @@ def make_sessionmaker(url):
         kwargs["connect_args"] = {"check_same_thread": False}
     engine = create_engine(url, **kwargs)
     Base.metadata.create_all(engine)
+    add_missing_columns(engine)
     return sessionmaker(engine, expire_on_commit=False)
+
+
+def add_missing_columns(engine):
+    """Простая миграция: новые столбцы моделей добавляются в уже существующие таблицы.
+
+    create_all создаёт только новые таблицы; без этого база прошлой версии не открылась бы.
+    Удаление и переименование столбцов так не делаем — для них понадобится Alembic.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    added = []
+    with engine.begin() as connection:
+        for table in Base.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                column_type = column.type.compile(dialect=engine.dialect)
+                default = column.default.arg if column.default is not None and not callable(column.default.arg) else None
+                if isinstance(default, bool):
+                    default_sql = " DEFAULT " + ("1" if default else "0")
+                elif isinstance(default, (int, float)):
+                    default_sql = f" DEFAULT {default}"
+                elif isinstance(default, str):
+                    default_sql = " DEFAULT '" + default.replace("'", "''") + "'"
+                else:
+                    default_sql = ""
+                connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}{default_sql}'))
+                added.append(f"{table.name}.{column.name}")
+    return added
