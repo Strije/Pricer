@@ -33,6 +33,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, Up
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
+from app import clients as client_service  # noqa: E402
 from app import db  # noqa: E402
 from app import orders as order_service  # noqa: E402
 from app import supplier_catalog as catalog  # noqa: E402
@@ -106,11 +107,14 @@ class CreateOrderRequest(BaseModel):
     job_id: str
     rows: list[int] = Field(min_length=1)
     selections: dict[str, str] = Field(default_factory=dict)  # номер строки -> internal_offer_id
-    client: str = Field(min_length=1, max_length=200)
+    client: str = Field(default="", max_length=200)  # можно не указывать, если выбран client_id
     manager: str = Field(default="", max_length=200)
     ship_date: str = Field(default="", max_length=20)
     comment: str = Field(default="", max_length=1000)
     vin: str = Field(default="", max_length=30)
+    phone: str = Field(default="", max_length=30)
+    client_id: int | None = None
+    vehicle_id: int | None = None
 
 
 class CartAddRequest(BaseModel):
@@ -124,11 +128,30 @@ class CartQuantityRequest(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
-    client: str = Field(min_length=1, max_length=200)
+    client: str = Field(default="", max_length=200)  # можно не указывать, если выбран client_id
     manager: str = Field(default="", max_length=200)
     ship_date: str = Field(default="", max_length=20)
     comment: str = Field(default="", max_length=1000)
     vin: str = Field(default="", max_length=30)
+    phone: str = Field(default="", max_length=30)
+    client_id: int | None = None
+    vehicle_id: int | None = None
+
+
+class ClientRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    phone: str = Field(default="", max_length=30)
+    email: str = Field(default="", max_length=254)
+    comment: str = Field(default="", max_length=2000)
+
+
+class VehicleRequest(BaseModel):
+    vin: str = Field(default="", max_length=30)
+    plate: str = Field(default="", max_length=20)
+    make: str = Field(default="", max_length=60)
+    model: str = Field(default="", max_length=60)
+    year: int | None = Field(default=None, ge=1950, le=2100)
+    comment: str = Field(default="", max_length=2000)
 
 
 class ItemsRequest(BaseModel):
@@ -644,16 +667,19 @@ def create_app(var_dir=None, database_url=None):
             raise HTTPException(status_code=404, detail="подбор не найден — повторите поиск по файлу")
         if not job.done:
             raise HTTPException(status_code=409, detail="подбор ещё идёт")
-        if re.search(r"[А-Яа-яЁё]", request.vin or ""):
-            raise HTTPException(status_code=400, detail="VIN набран кириллицей — переключите раскладку на латиницу")
         engine = engine_for(user["organization_id"])
         with engine.lock:
             entries, errors = order_service.prepare_entries(engine, job.results, request.rows, request.selections)
+            if not entries:
+                raise HTTPException(status_code=400, detail="нет строк, готовых к заказу")
+            client_fields = resolve_client(user, request)
             engine.order_store.user_id = user["id"]
             try:
                 order = order_service.create_order_from_file(
                     engine, engine.order_store, entries, manager=request.manager or user["name"] or user["email"],
-                    client=request.client, ship_date=request.ship_date, comment=request.comment, vin=request.vin)
+                    client=client_fields["name"], ship_date=request.ship_date, comment=request.comment,
+                    vin=client_fields["vin"])
+                order = link_client(engine.order_store, order, client_fields)
             except order_service.OrderActionError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             finally:
@@ -749,6 +775,122 @@ def create_app(var_dir=None, database_url=None):
             return [{"created_at": r.created_at.isoformat(timespec="seconds"), "provider": r.provider,
                      "brand": r.brand, "article": r.article, "quantity": r.quantity, "success": r.success,
                      "response": (r.response or {}).get("response")} for r in rows]
+
+    # ----- клиенты -----
+
+    def resolve_client(user, request):
+        """Клиент и машина для заказа: выбранные, найденные или созданные заново."""
+        if re.search(r"[А-Яа-яЁё]", request.vin or ""):
+            raise HTTPException(status_code=400, detail="VIN набран кириллицей — переключите раскладку на латиницу")
+        warning = client_service.vin_warning(client_service.normalize_vin(request.vin))
+        if warning:
+            raise HTTPException(status_code=400, detail=warning)
+        with Session() as session:
+            try:
+                client, vehicle = client_service.resolve(
+                    session, user["organization_id"], client_id=request.client_id, vehicle_id=request.vehicle_id,
+                    name=request.client, phone=request.phone, vin=request.vin)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            fields = client_service.order_client_fields(client, vehicle)
+            session.commit()
+        return fields
+
+    def link_client(store, order, fields):
+        order = dict(order)
+        order["client"] = {**(order.get("client") or {}), **fields}
+        return store.update(order)
+
+    @app.get("/api/clients")
+    def list_clients(q: str = "", user=Depends(current_user)):
+        with Session() as session:
+            return [client_service.client_view(c) for c in client_service.search(session, user["organization_id"], q)]
+
+    @app.post("/api/clients")
+    def create_client(request: ClientRequest, user=Depends(current_user)):
+        with Session() as session:
+            client = db.Client(organization_id=user["organization_id"], name=request.name.strip(),
+                               phone=client_service.normalize_phone(request.phone), email=request.email.strip(),
+                               comment=request.comment)
+            session.add(client)
+            session.commit()
+            return client_service.client_view(client)
+
+    def _client(session, user, client_id):
+        client = session.get(db.Client, client_id)
+        if client is None or client.organization_id != user["organization_id"]:
+            raise HTTPException(status_code=404, detail="клиент не найден")
+        return client
+
+    @app.get("/api/clients/{client_id}")
+    def get_client(client_id: int, user=Depends(current_user)):
+        with Session() as session:
+            view = client_service.client_view(_client(session, user, client_id))
+        history = []
+        for order in engine_for(user["organization_id"]).order_store.list_orders():
+            client = order.get("client") or {}
+            if client.get("id") != client_id:
+                continue
+            history.append({
+                "order_id": order.get("order_id"), "created_at": order.get("created_at"), "status": order.get("status"),
+                "vehicle_id": client.get("vehicle_id"), "vin": client.get("vin"), "totals": order.get("totals"),
+                "items": [{k: i.get(k) for k in ("brand", "article", "name", "quantity", "sale_price", "submit_status")}
+                          for i in order.get("items") or []],
+            })
+        return {**view, "orders": history}
+
+    @app.put("/api/clients/{client_id}")
+    def update_client(client_id: int, request: ClientRequest, user=Depends(current_user)):
+        with Session() as session:
+            client = _client(session, user, client_id)
+            client.name, client.email, client.comment = request.name.strip(), request.email.strip(), request.comment
+            client.phone = client_service.normalize_phone(request.phone)
+            session.commit()
+            return client_service.client_view(client)
+
+    @app.post("/api/clients/{client_id}/vehicles")
+    def add_vehicle(client_id: int, request: VehicleRequest, user=Depends(current_user)):
+        vin = client_service.normalize_vin(request.vin)
+        if re.search(r"[А-Яа-яЁё]", request.vin) or client_service.vin_warning(vin):
+            raise HTTPException(status_code=400, detail="VIN: латиница и цифры, без букв I, O, Q")
+        with Session() as session:
+            client = _client(session, user, client_id)
+            if vin and any(v.vin == vin for v in client.vehicles):
+                raise HTTPException(status_code=409, detail="эта машина уже есть у клиента")
+            session.add(db.Vehicle(organization_id=user["organization_id"], client=client, vin=vin,
+                                   plate=request.plate.strip().upper(), make=request.make.strip(),
+                                   model=request.model.strip(), year=request.year, comment=request.comment))
+            session.commit()
+            return client_service.client_view(client)
+
+    def _vehicle(session, user, vehicle_id):
+        vehicle = session.get(db.Vehicle, vehicle_id)
+        if vehicle is None or vehicle.organization_id != user["organization_id"]:
+            raise HTTPException(status_code=404, detail="машина не найдена")
+        return vehicle
+
+    @app.put("/api/vehicles/{vehicle_id}")
+    def update_vehicle(vehicle_id: int, request: VehicleRequest, user=Depends(current_user)):
+        with Session() as session:
+            vehicle = _vehicle(session, user, vehicle_id)
+            vin = client_service.normalize_vin(request.vin)
+            if re.search(r"[А-Яа-яЁё]", request.vin) or client_service.vin_warning(vin):
+                raise HTTPException(status_code=400, detail="VIN: латиница и цифры, без букв I, O, Q")
+            vehicle.vin, vehicle.plate = vin, request.plate.strip().upper()
+            vehicle.make, vehicle.model, vehicle.year, vehicle.comment = (
+                request.make.strip(), request.model.strip(), request.year, request.comment)
+            session.commit()
+            return client_service.client_view(vehicle.client)
+
+    @app.delete("/api/vehicles/{vehicle_id}")
+    def delete_vehicle(vehicle_id: int, user=Depends(current_user)):
+        with Session() as session:
+            vehicle = _vehicle(session, user, vehicle_id)
+            client = vehicle.client
+            session.delete(vehicle)
+            session.commit()
+            session.refresh(client)
+            return client_service.client_view(client)
 
     # ----- корзина -----
 
@@ -852,10 +994,12 @@ def create_app(var_dir=None, database_url=None):
 
     @app.post("/api/cart/checkout")
     def checkout(request: CheckoutRequest, user=Depends(current_user)):
-        """Как «Оформить заказ» в корзине десктопа (_save_draft_order)."""
-        if re.search(r"[А-Яа-яЁё]", request.vin or ""):
-            raise HTTPException(status_code=400, detail="VIN набран кириллицей — переключите раскладку на латиницу")
+        """Как «Оформить заказ» в корзине десктопа (_save_draft_order) + справочник клиентов."""
         engine = engine_for(user["organization_id"])
+        with Session() as session:
+            if not load_cart(session, user["id"]).rows():
+                raise HTTPException(status_code=400, detail="корзина пуста")
+        client_fields = resolve_client(user, request)
         with engine.lock, Session() as session:
             cart = load_cart(session, user["id"])
             if not cart.rows():
@@ -864,10 +1008,11 @@ def create_app(var_dir=None, database_url=None):
             engine.order_store.user_id = user["id"]
             try:
                 order = engine.order_store.create_draft(
-                    manager=request.manager or user["name"] or user["email"], client=request.client,
+                    manager=request.manager or user["name"] or user["email"], client=client_fields["name"],
                     ship_date=request.ship_date or engine.order_store.calculated_ready_date(entries),
-                    entries=entries, comment=request.comment, client_vin=request.vin, grouping_mode="manual",
+                    entries=entries, comment=request.comment, client_vin=client_fields["vin"], grouping_mode="manual",
                     verified_at=engine._entries_verified_at(entries))
+                order = link_client(engine.order_store, order, client_fields)
             finally:
                 engine.order_store.user_id = None
             cart.clear()

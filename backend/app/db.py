@@ -93,6 +93,34 @@ class SubmissionLog(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Client(Base):
+    """Клиент организации (в десктопе — строка в заказе)."""
+    __tablename__ = "clients"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    phone: Mapped[str] = mapped_column(String(30), default="", index=True)
+    email: Mapped[str] = mapped_column(String(254), default="")
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="client", cascade="all, delete-orphan")
+
+
+class Vehicle(Base):
+    """Машина клиента: VIN или номер кузова, госномер, марка, модель, год."""
+    __tablename__ = "vehicles"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    vin: Mapped[str] = mapped_column(String(30), default="", index=True)
+    plate: Mapped[str] = mapped_column(String(20), default="")
+    make: Mapped[str] = mapped_column(String(60), default="")
+    model: Mapped[str] = mapped_column(String(60), default="")
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    client: Mapped[Client] = relationship(back_populates="vehicles")
+
+
 class Cart(Base):
     """Корзина пользователя (в десктопе — DraftCart в памяти окна): строки в формате DraftCart."""
     __tablename__ = "carts"

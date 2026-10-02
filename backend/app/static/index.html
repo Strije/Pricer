@@ -116,6 +116,7 @@
     <button class="tab" data-tab="file">Заказ из файла</button>
     <button class="tab" data-tab="orders">Заказы</button>
     <button class="tab" data-tab="cart">Корзина</button>
+    <button class="tab" data-tab="clients">Клиенты</button>
     <button class="tab" data-tab="suppliers">Поставщики</button>
   </nav>
   <section id="tab-search">
@@ -180,7 +181,10 @@
       </table>
     </div>
     <form class="panel row" id="of-order" hidden style="margin-top:14px">
-      <label>Клиент <input id="of-client" required></label>
+      <label>Клиент <input id="of-client" list="of-clients" autocomplete="off" placeholder="имя, телефон или VIN"></label>
+      <datalist id="of-clients"></datalist>
+      <label>Телефон <input id="of-phone" inputmode="tel"></label>
+      <label>Машина <select id="of-vehicle"><option value="">новая или без машины</option></select></label>
       <label>Менеджер <input id="of-manager"></label>
       <label>Дата отгрузки <input id="of-date" type="date"></label>
       <label>VIN <input id="of-vin" maxlength="30"></label>
@@ -227,7 +231,10 @@
     </div>
     <div class="toolbar"><span class="muted" id="cart-total"></span><button class="danger" id="cart-clear">Очистить корзину</button></div>
     <form class="panel row" id="cart-order">
-      <label>Клиент <input id="co-client" required></label>
+      <label>Клиент <input id="co-client" list="co-clients" autocomplete="off" placeholder="имя, телефон или VIN"></label>
+      <datalist id="co-clients"></datalist>
+      <label>Телефон <input id="co-phone" inputmode="tel"></label>
+      <label>Машина <select id="co-vehicle"><option value="">новая или без машины</option></select></label>
       <label>Менеджер <input id="co-manager"></label>
       <label>Дата отгрузки <input id="co-date" type="date"></label>
       <label>VIN <input id="co-vin" maxlength="30"></label>
@@ -235,6 +242,36 @@
       <button>Оформить заказ</button>
       <span class="msg" id="co-msg"></span>
     </form>
+  </section>
+  <section id="tab-clients" class="hidden">
+    <div class="panel row">
+      <input id="cl-q" placeholder="Поиск: имя, телефон, VIN, госномер" style="flex:1 1 260px">
+      <button class="secondary" id="cl-new">Новый клиент</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Клиент</th><th>Телефон</th><th>Машины</th></tr></thead>
+      <tbody id="cl-rows"></tbody>
+    </table></div>
+    <div class="panel hidden" id="cl-card" style="margin-top:14px">
+      <form class="row" id="cl-form">
+        <label>Имя <input id="cl-name" required></label>
+        <label>Телефон <input id="cl-phone"></label>
+        <label>Почта <input id="cl-email" type="email"></label>
+        <label style="flex:1 1 220px">Комментарий <input id="cl-comment"></label>
+        <button>Сохранить</button><span class="msg" id="cl-msg"></span>
+      </form>
+      <h3 style="font-size:14px;margin:14px 0 6px">Машины</h3>
+      <div id="cl-vehicles"></div>
+      <form class="row" id="cl-vform" style="margin-top:8px">
+        <input id="v-vin" placeholder="VIN или номер кузова" maxlength="30">
+        <input id="v-plate" placeholder="Госномер" maxlength="20" style="width:110px">
+        <input id="v-make" placeholder="Марка" style="width:120px"><input id="v-model" placeholder="Модель" style="width:120px">
+        <input id="v-year" type="number" placeholder="Год" min="1950" max="2100" style="width:80px">
+        <button class="secondary">Добавить машину</button><span class="msg" id="cl-vmsg"></span>
+      </form>
+      <h3 style="font-size:14px;margin:14px 0 6px">Заказы</h3>
+      <div id="cl-orders" class="note"></div>
+    </div>
   </section>
   <section id="tab-suppliers" class="hidden">
     <div class="panel">
@@ -260,6 +297,7 @@ const $ = (id) => document.getElementById(id);
 const UNKNOWN_HOURS = 999999 * 24;
 const money = (v) => v == null || v === "" ? "—" : Number(v).toLocaleString("ru-RU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const days = (h) => h == null || h >= UNKNOWN_HOURS ? "—" : (h <= 0 ? "сегодня" : Math.ceil(h / 24) + " дн");
+const phone = (p) => { const d = String(p || ""); return d.length === 11 && d[0] === "7" ? `+7 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7, 9)}-${d.slice(9)}` : d; };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const STATUS = {ok: "ок", empty: "пусто", timeout: "таймаут", error: "ошибка", skipped: "пропущен", cancelled: "отменён", local_skipped: "локальный"};
 
@@ -324,10 +362,11 @@ $("auth-form").addEventListener("submit", async (e) => {
 $("logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}).catch(() => {}); showAuth(); };
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  for (const name of ["search", "file", "orders", "cart", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
+  for (const name of ["search", "file", "orders", "cart", "clients", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "suppliers") loadSuppliers();
   if (t.dataset.tab === "orders") loadOrders();
   if (t.dataset.tab === "cart") loadCart();
+  if (t.dataset.tab === "clients") loadClients();
 });
 
 async function loadSuppliers() {
@@ -509,8 +548,9 @@ $("of-order").addEventListener("submit", async (e) => {
   const selections = {};
   rows.forEach((i) => { if (ofResults[i] && ofResults[i].chosen) selections[i] = ofResults[i].chosen; });
   try {
-    const r = await api("/api/orders", {method: "POST", body: {job_id: ofJob, rows, selections, client: $("of-client").value.trim(),
+    const r = await api("/api/orders", {method: "POST", body: {job_id: ofJob, rows, selections, ...pickerValues("of"), client: $("of-client").value.trim(),
       manager: $("of-manager").value.trim(), ship_date: $("of-date").value, vin: $("of-vin").value.trim(), comment: $("of-comment").value.trim()}});
+    $("of-order").reset(); pickers.of.chosen = null;
     $("of-order-msg").className = "msg ok"; $("of-order-msg").textContent = `Создан ${r.order.order_id}` + (r.warnings.length ? `, пропущено: ${r.warnings.length}` : "");
     document.querySelector('[data-tab="orders"]').click(); openOrder(r.order.order_id);
   } catch (err) { $("of-order-msg").className = "msg"; $("of-order-msg").textContent = err.message; }
@@ -538,7 +578,7 @@ function renderOrder(order) {
   currentOrder = order; $("ord-detail").classList.remove("hidden");
   const t = order.totals || {}, c = order.client || {};
   $("ord-title").innerHTML = `${esc(order.order_id)} ${badge(ORDER, order.status)} ${badge(VERIFY, order.verification_status)}`;
-  $("ord-info").textContent = `Клиент: ${c.name || "—"}${c.vin ? " · VIN " + c.vin : ""} · менеджер: ${(order.manager || {}).name || "—"} · готовность: ${order.calculated_ready_date || "—"} · продажа ${money(t.sale_total)} ₽, маржа ${money(t.margin)} ₽`;
+  $("ord-info").textContent = `Клиент: ${c.name || "—"}${c.phone ? " · " + phone(c.phone) : ""}${c.vehicle ? " · " + c.vehicle : ""}${c.vin ? " · VIN " + c.vin : ""} · менеджер: ${(order.manager || {}).name || "—"} · готовность: ${order.calculated_ready_date || "—"} · продажа ${money(t.sale_total)} ₽, маржа ${money(t.margin)} ₽`;
   $("ord-items").innerHTML = (order.items || []).map((it, i) => {
     const resp = it.supplier_response ? (it.supplier_response.error || it.supplier_response.message || it.supplier_response.data || "") : "";
     const canSkip = !["submitted", "skipped", "unknown"].includes(it.submit_status);
@@ -620,11 +660,95 @@ $("cart-clear").onclick = async () => { if (confirm("Очистить корзи
 $("cart-order").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
-    const r = await api("/api/cart/checkout", {method: "POST", body: {client: $("co-client").value.trim(), manager: $("co-manager").value.trim(),
+    const r = await api("/api/cart/checkout", {method: "POST", body: {...pickerValues("co"), client: $("co-client").value.trim(), manager: $("co-manager").value.trim(),
       ship_date: $("co-date").value, vin: $("co-vin").value.trim(), comment: $("co-comment").value.trim()}});
-    $("co-msg").textContent = ""; loadCart();
+    $("co-msg").textContent = ""; $("cart-order").reset(); pickers.co.chosen = null; loadCart();
     document.querySelector('[data-tab="orders"]').click(); openOrder(r.order.order_id);
   } catch (err) { $("co-msg").className = "msg"; $("co-msg").textContent = err.message; }
+});
+
+// ---------- клиенты ----------
+const pickers = {};
+function setupClientPicker(p) {
+  const state = pickers[p] = {list: [], chosen: null};
+  let timer = null;
+  const fill = (client) => {
+    state.chosen = client;
+    $(`${p}-phone`).value = client ? phone(client.phone) : $(`${p}-phone`).value;
+    $(`${p}-vehicle`).innerHTML = '<option value="">новая или без машины</option>' + (client ? client.vehicles.map((v) =>
+      `<option value="${v.id}">${esc([v.make, v.model, v.year, v.vin, v.plate].filter(Boolean).join(" · "))}</option>`).join("") : "");
+    if (client && client.vehicles.length === 1) { $(`${p}-vehicle`).value = String(client.vehicles[0].id); }
+  };
+  $(`${p}-vehicle`).onchange = () => {
+    const v = state.chosen && state.chosen.vehicles.find((x) => String(x.id) === $(`${p}-vehicle`).value);
+    if (v) $(`${p}-vin`).value = v.vin || "";
+  };
+  $(`${p}-client`).addEventListener("input", () => {
+    const text = $(`${p}-client`).value.trim();
+    const exact = state.list.find((c) => c.name === text);
+    fill(exact || null);
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (text.length < 2) return;
+      try {
+        state.list = await api(`/api/clients?q=${encodeURIComponent(text)}`);
+        $(`${p}-clients`).innerHTML = state.list.map((c) => `<option value="${esc(c.name)}">${esc([c.phone, ...c.vehicles.map((v) => v.vin)].filter(Boolean).join(" · "))}</option>`).join("");
+        const match = state.list.find((c) => c.name === $(`${p}-client`).value.trim());
+        if (match) fill(match);
+      } catch (e) {}
+    }, 250);
+  });
+}
+function pickerValues(p) {
+  const st = pickers[p] || {};
+  const vehicle = $(`${p}-vehicle`).value;
+  return {client_id: st.chosen ? st.chosen.id : null, vehicle_id: vehicle ? Number(vehicle) : null, phone: $(`${p}-phone`).value.trim()};
+}
+setupClientPicker("of"); setupClientPicker("co");
+
+let clTimer = null, currentClient = null;
+async function loadClients() {
+  const list = await api(`/api/clients?q=${encodeURIComponent($("cl-q").value.trim())}`);
+  $("cl-rows").innerHTML = list.length ? list.map((c) => `<tr class="clickable" data-client="${c.id}"><td><strong>${esc(c.name)}</strong></td>
+    <td>${esc(phone(c.phone))}</td><td>${c.vehicles.map((v) => esc([v.make, v.model, v.vin || v.plate].filter(Boolean).join(" "))).join("<br>") || '<span class="muted">—</span>'}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="muted">Клиентов нет. Они появляются сами при оформлении заказа или кнопкой «Новый клиент».</td></tr>';
+  document.querySelectorAll("[data-client]").forEach((tr) => tr.onclick = () => openClient(Number(tr.dataset.client)));
+}
+$("cl-q").addEventListener("input", () => { clearTimeout(clTimer); clTimer = setTimeout(loadClients, 250); });
+async function openClient(id) {
+  const c = await api(`/api/clients/${id}`); currentClient = c;
+  $("cl-card").classList.remove("hidden"); $("cl-msg").textContent = ""; $("cl-vmsg").textContent = "";
+  $("cl-name").value = c.name; $("cl-phone").value = phone(c.phone); $("cl-email").value = c.email || ""; $("cl-comment").value = c.comment || "";
+  $("cl-vehicles").innerHTML = c.vehicles.length ? c.vehicles.map((v) => `<div class="row" style="margin-bottom:4px">
+      <strong>${esc([v.make, v.model, v.year].filter(Boolean).join(" ") || "Машина")}</strong>
+      <span>${esc(v.vin || "")}</span><span class="muted">${esc(v.plate || "")}</span>
+      <button class="link" data-vdel="${v.id}">удалить</button></div>`).join("") : '<div class="note">Машин пока нет</div>';
+  document.querySelectorAll("[data-vdel]").forEach((b) => b.onclick = async () => { if (confirm("Удалить машину?")) { await api(`/api/vehicles/${b.dataset.vdel}`, {method: "DELETE"}); openClient(id); loadClients(); } });
+  $("cl-orders").innerHTML = c.orders.length ? c.orders.map((o) => `<div><button class="link" data-corder="${esc(o.order_id)}">${esc(o.order_id)}</button>
+      · ${esc((o.created_at || "").replace("T", " ").slice(0, 16))} · ${esc(o.vin || "")} · ${money((o.totals || {}).sale_total)} ₽ ·
+      ${o.items.map((i) => esc(`${i.brand} ${i.article}`)).join(", ")}</div>`).join("") : "Заказов пока нет";
+  document.querySelectorAll("[data-corder]").forEach((b) => b.onclick = () => { document.querySelector('[data-tab="orders"]').click(); openOrder(b.dataset.corder); });
+}
+$("cl-new").onclick = async () => {
+  const name = prompt("Имя клиента"); if (!name) return;
+  const c = await api("/api/clients", {method: "POST", body: {name}}); loadClients(); openClient(c.id);
+};
+$("cl-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api(`/api/clients/${currentClient.id}`, {method: "PUT", body: {name: $("cl-name").value.trim(), phone: $("cl-phone").value.trim(),
+      email: $("cl-email").value.trim(), comment: $("cl-comment").value.trim()}});
+    $("cl-msg").className = "msg ok"; $("cl-msg").textContent = "Сохранено"; loadClients();
+  } catch (err) { $("cl-msg").className = "msg"; $("cl-msg").textContent = err.message; }
+});
+$("cl-vform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api(`/api/clients/${currentClient.id}/vehicles`, {method: "POST", body: {vin: $("v-vin").value.trim(), plate: $("v-plate").value.trim(),
+      make: $("v-make").value.trim(), model: $("v-model").value.trim(), year: $("v-year").value ? Number($("v-year").value) : null}});
+    ["v-vin", "v-plate", "v-make", "v-model", "v-year"].forEach((id) => $(id).value = "");
+    openClient(currentClient.id); loadClients();
+  } catch (err) { $("cl-vmsg").textContent = err.message; }
 });
 </script>
 </body>
