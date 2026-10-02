@@ -188,13 +188,28 @@
   .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: .15s; }
   .switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
   .switch input:checked + span { background: var(--ok); } .switch input:checked + span::before { transform: translateX(16px); }
+  .quotes-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
+  .q-list { display: flex; flex-direction: column; gap: 6px; }
+  .q-item { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; }
+  .q-item.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .q-editor { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .q-line { border-top: 1px solid var(--line); padding: 10px 0; }
+  .q-var { display: grid; grid-template-columns: 22px minmax(0, 2fr) 80px 90px 100px 26px; gap: 8px; align-items: center; font-size: 13px; padding: 4px 0; }
+  .q-var.chosen { background: var(--ok-soft); border-radius: 6px; }
+  .q-share { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: var(--bg); border-radius: 8px; padding: 8px; margin: 10px 0; }
+  .q-share input { flex: 1 1 240px; }
+  .quote-add { padding: 5px 8px; }
+  .banner-ok { background: var(--ok-soft); color: var(--ok); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .role-customer .quote-add, .role-customer [data-tab="quotes"] { display: none !important; }
+  @media (max-width: 900px) { .quotes-layout { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) { .q-var { grid-template-columns: 22px minmax(0, 1fr) auto 26px; } .q-var .q-pur, .q-var .q-term { display: none; } }
 </style>
 </head>
 <body>
 <header>
   <h1>Pricer</h1><span class="sub">проценка по всем поставщикам</span>
   <span class="badge" id="replay" hidden>демонстрация на записанных ответах</span>
-  <span class="user hidden" id="userbox"><button class="cartbtn" id="cart-badge" title="Корзина">🛒 <span id="cart-count">0</span> · <span id="cart-sum">0</span> ₽</button><span id="who"></span><button class="link" id="logout">Выйти</button></span>
+  <span class="user hidden" id="userbox"><button class="cartbtn hidden" id="quote-badge" title="Активный подбор: сюда добавляются варианты кнопкой 📋">📋 <span id="quote-count">0</span></button><button class="cartbtn" id="cart-badge" title="Корзина">🛒 <span id="cart-count">0</span> · <span id="cart-sum">0</span> ₽</button><span id="who"></span><button class="link" id="logout">Выйти</button></span>
 </header>
 <section class="auth hidden" id="auth">
   <h2 id="auth-title">Вход</h2>
@@ -217,6 +232,7 @@
     <button class="tab" data-tab="orders">Заказы</button>
     <button class="tab" data-tab="lines">Заказы поставщикам</button>
     <button class="tab" data-tab="cart">Корзина</button>
+    <button class="tab" data-tab="quotes">Подборы</button>
     <button class="tab" data-tab="clients">Клиенты</button>
     <button class="tab" data-tab="suppliers">Поставщики</button>
   </nav>
@@ -395,6 +411,17 @@
       <span class="msg" id="co-msg"></span>
     </form>
   </section>
+  <section id="tab-quotes" class="hidden">
+    <div class="row" style="margin-bottom:10px">
+      <button id="q-new">Новый подбор</button>
+      <input id="q-search" placeholder="Поиск по названию или клиенту" style="flex:1 1 220px">
+      <span class="note">Подбор — варианты для клиента по ссылке: он выбирает сам, вы оформляете заказ одной кнопкой.</span>
+    </div>
+    <div class="quotes-layout">
+      <div id="q-list" class="q-list"></div>
+      <div id="q-editor" class="q-editor"><p class="note">Выберите подбор слева или создайте новый. Варианты добавляются из выдачи поиска кнопкой 📋.</p></div>
+    </div>
+  </section>
   <section id="tab-clients" class="hidden">
     <div class="panel row">
       <input id="cl-q" placeholder="Поиск: имя, телефон, VIN, госномер" style="flex:1 1 260px">
@@ -537,10 +564,11 @@ $("auth-form").addEventListener("submit", async (e) => {
 $("logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}).catch(() => {}); showAuth(); };
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  for (const name of ["search", "file", "orders", "lines", "cart", "clients", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
+  for (const name of ["search", "file", "orders", "lines", "cart", "quotes", "clients", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "suppliers") loadSuppliers();
   if (t.dataset.tab === "orders") loadOrders();
   if (t.dataset.tab === "cart") loadCart();
+  if (t.dataset.tab === "quotes") loadQuotes();
   if (t.dataset.tab === "clients") loadClients();
   if (t.dataset.tab === "lines") { loadLines(); loadReliability(); }
 });
@@ -1024,6 +1052,7 @@ async function checkNotifications() {
     notifyLast = r.last_id;
     try { localStorage.setItem(notifyKey, String(notifyLast)); } catch (e) {}
   } catch (e) {}
+  if (typeof checkOtherNotifications === "function") checkOtherNotifications(notifyKey);
 }
 function showRefusal(n) {
   const title = `${n.label[0].toUpperCase()}${n.label.slice(1)}: ${n.provider}`;
@@ -1033,18 +1062,19 @@ function showRefusal(n) {
     try { new Notification(title, {body, tag: "pricer-line-" + n.line_id}); } catch (e) {}
   }
 }
-function showToast(title, body, lineId) {
+function showToast(title, body, lineId, action) {
   const el = document.createElement("div");
   el.className = "toast"; el.setAttribute("role", "status");
   const askSystem = "Notification" in window && Notification.permission === "default";
   el.innerHTML = `<div class="t-head"><span>${esc(title)}</span><button class="t-close" title="Закрыть">×</button></div>
     <div style="white-space:pre-line">${esc(body)}</div>
-    <div class="t-actions">${lineId ? '<button class="link" data-open>Открыть позицию</button>' : ""}
+    <div class="t-actions">${lineId ? '<button class="link" data-open>Открыть позицию</button>' : ""}${action ? `<button class="link" data-act>${esc(action.label)}</button>` : ""}
       ${askSystem ? '<button class="link" data-sys>Показывать и в фоне</button>' : ""}</div>`;
   el.querySelector(".t-close").onclick = () => el.remove();
   if (lineId) el.querySelector("[data-open]").onclick = () => {
     document.querySelector('[data-tab="lines"]').click(); loadLines(); openLine(lineId); el.remove();
   };
+  if (action) el.querySelector("[data-act]").onclick = () => { action.fn(); el.remove(); };
   if (askSystem) el.querySelector("[data-sys]").onclick = (ev) => { Notification.requestPermission(); ev.target.remove(); };
   $("toasts").appendChild(el);
   while ($("toasts").children.length > 6) $("toasts").firstChild.remove();
@@ -1126,5 +1156,6 @@ $("ss-save").onclick = async () => {
 };
 </script>
 <script src="/static/search.js"></script>
+<script src="/static/quotes.js"></script>
 </body>
 </html>

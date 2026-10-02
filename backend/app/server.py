@@ -39,6 +39,7 @@ from app import clients as client_service  # noqa: E402
 from app import db  # noqa: E402
 from app import orders as order_service  # noqa: E402
 from app import supplier_catalog as catalog  # noqa: E402
+from app import quotes as quote_service  # noqa: E402
 from app import search as search_service  # noqa: E402
 from app import supplier_lines as lines_service  # noqa: E402
 from app.redact import Redactor  # noqa: E402
@@ -128,6 +129,38 @@ class FindRequest(BaseModel):
     article: str = Field(min_length=1, max_length=80)
     brand: str = Field(default="", max_length=120)
     brand_hint: str = Field(default="", max_length=80)
+
+
+class QuoteRequest(BaseModel):
+    title: str = Field(default="", max_length=200)
+    client: str = Field(default="", max_length=200)
+    phone: str = Field(default="", max_length=30)
+    vin: str = Field(default="", max_length=30)
+    client_id: int | None = None
+    vehicle_id: int | None = None
+
+
+class QuoteLineRequest(BaseModel):
+    request: str | None = Field(default=None, max_length=200)
+    qty: int | None = Field(default=None, ge=1, le=10000)
+
+
+class QuoteVariantRequest(BaseModel):
+    job_id: str
+    internal_offer_id: str = Field(min_length=1, max_length=64)
+    line_id: str = Field(default="", max_length=20)  # пусто — позиция по запросу поиска (создаётся сама)
+    request: str = Field(default="", max_length=200)
+    qty: int = Field(default=1, ge=1, le=10000)
+
+
+class QuoteSendRequest(BaseModel):
+    hours: int = Field(default=24, ge=1, le=336)
+
+
+class QuoteChoiceRequest(BaseModel):
+    choices: dict[str, str] = Field(default_factory=dict)
+    comment: str = Field(default="", max_length=1000)
+    contact: str = Field(default="", max_length=200)
 
 
 class FavoritesRequest(BaseModel):
@@ -1271,20 +1304,254 @@ def create_app(var_dir=None, database_url=None):
             cart = load_cart(session, user["id"])
             if not cart.rows():
                 raise HTTPException(status_code=400, detail="корзина пуста")
-            entries = engine._order_entries_with_prices(cart.rows())
-            engine.order_store.user_id = user["id"]
-            try:
-                order = engine.order_store.create_draft(
-                    manager=request.manager or user["name"] or user["email"], client=client_fields["name"],
-                    ship_date=request.ship_date or engine.order_store.calculated_ready_date(entries),
-                    entries=entries, comment=request.comment, client_vin=client_fields["vin"], grouping_mode="manual",
-                    verified_at=engine._entries_verified_at(entries))
-                order = link_client(engine.order_store, order, client_fields)
-            finally:
-                engine.order_store.user_id = None
+            order = order_from_cart(engine, user, cart, client_fields, manager=request.manager,
+                                    ship_date=request.ship_date, comment=request.comment)
             cart.clear()
             save_cart(session, user["id"], cart)
         return {"order": _order_view(order)}
+
+    def order_from_cart(engine, user, cart, client_fields, manager="", ship_date="", comment=""):
+        """Заказ-черновик из строк корзины (DraftCart), как «Оформить заказ» десктопа. Под engine.lock."""
+        entries = engine._order_entries_with_prices(cart.rows())
+        engine.order_store.user_id = user["id"]
+        try:
+            order = engine.order_store.create_draft(
+                manager=manager or user["name"] or user["email"], client=client_fields["name"],
+                ship_date=ship_date or engine.order_store.calculated_ready_date(entries),
+                entries=entries, comment=comment, client_vin=client_fields["vin"], grouping_mode="manual",
+                verified_at=engine._entries_verified_at(entries))
+            return link_client(engine.order_store, order, client_fields)
+        finally:
+            engine.order_store.user_id = None
+
+    # ----- подбор для клиента: варианты по ссылке, выбор клиента, заказ -----
+
+    def staff_user(user=Depends(current_user)):
+        if user["role"] == "customer":
+            raise HTTPException(status_code=403, detail="недоступно покупателю")
+        return user
+
+    def _quote(session, user, quote_id):
+        quote = session.get(db.Quote, quote_id)
+        if quote is None or quote.organization_id != user["organization_id"]:
+            raise HTTPException(status_code=404, detail="подбор не найден")
+        return quote
+
+    def quote_call(fn):
+        try:
+            return fn()
+        except quote_service.QuoteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    def quote_client(user, request):
+        if not (request.client or request.client_id or request.phone):
+            return None, None, ""
+        with Session() as session:
+            try:
+                client, vehicle = client_service.resolve(
+                    session, user["organization_id"], client_id=request.client_id, vehicle_id=request.vehicle_id,
+                    name=request.client, phone=request.phone, vin=request.vin)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            session.commit()
+            return client.id if client else None, vehicle.id if vehicle else None, client.name if client else ""
+
+    @app.get("/api/quotes")
+    def list_quotes(user=Depends(staff_user)):
+        with Session() as session:
+            rows = (session.query(db.Quote).filter_by(organization_id=user["organization_id"])
+                    .order_by(db.Quote.id.desc()).limit(200).all())
+            return [{k: v for k, v in quote_service.manager_view(q).items() if k != "lines"} for q in rows]
+
+    @app.post("/api/quotes")
+    def create_quote(request: QuoteRequest, user=Depends(staff_user)):
+        client_id, vehicle_id, client_name = quote_client(user, request)
+        with Session() as session:
+            quote = db.Quote(organization_id=user["organization_id"], token=quote_service.new_token(),
+                             title=request.title.strip() or f"Подбор от {db.utcnow():%d.%m.%Y %H:%M}",
+                             client_id=client_id, vehicle_id=vehicle_id, client_name=client_name,
+                             created_by=user["id"], data={"lines": []})
+            session.add(quote)
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.get("/api/quotes/{quote_id}")
+    def get_quote(quote_id: int, user=Depends(staff_user)):
+        with Session() as session:
+            return quote_service.manager_view(_quote(session, user, quote_id))
+
+    @app.put("/api/quotes/{quote_id}")
+    def update_quote(quote_id: int, request: QuoteRequest, user=Depends(staff_user)):
+        client_id, vehicle_id, client_name = quote_client(user, request)
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            if request.title.strip():
+                quote.title = request.title.strip()
+            if client_id:
+                quote.client_id, quote.vehicle_id, quote.client_name = client_id, vehicle_id, client_name
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.delete("/api/quotes/{quote_id}")
+    def delete_quote(quote_id: int, user=Depends(staff_user)):
+        with Session() as session:
+            session.delete(_quote(session, user, quote_id))
+            session.commit()
+        return {"ok": True}
+
+    @app.post("/api/quotes/{quote_id}/lines")
+    def add_quote_line(quote_id: int, request: QuoteLineRequest, user=Depends(staff_user)):
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            quote_call(lambda: quote_service.add_line(quote, request.request or "", request.qty or 1))
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.put("/api/quotes/{quote_id}/lines/{line_id}")
+    def update_quote_line(quote_id: int, line_id: str, request: QuoteLineRequest, user=Depends(staff_user)):
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            quote_call(lambda: quote_service.update_line(quote, line_id, request.request, request.qty))
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.delete("/api/quotes/{quote_id}/lines/{line_id}")
+    def delete_quote_line(quote_id: int, line_id: str, user=Depends(staff_user)):
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            quote_service.remove_line(quote, line_id)
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.post("/api/quotes/{quote_id}/variants")
+    def add_quote_variant(quote_id: int, request: QuoteVariantRequest, user=Depends(staff_user)):
+        """Вариант из выдачи поиска. Без line_id позиция ищется по запросу поиска (или создаётся):
+        все варианты одного поиска попадают в одну позицию подбора."""
+        job = state["jobs"].get(request.job_id)
+        if job is None or job.organization_id != user["organization_id"] or not job.results:
+            raise HTTPException(status_code=404, detail="результат поиска устарел — повторите поиск")
+        offer = next((o for o in job.results[0].get("alternatives") or []
+                      if str(o.get("internal_offer_id")) == request.internal_offer_id), None)
+        if offer is None:
+            raise HTTPException(status_code=404, detail="предложение не найдено в результате поиска")
+        engine = engine_for(user["organization_id"])
+        sale = float(engine.apply_markup(float(offer.get("purchase_price", offer.get("price")) or 0))[0])
+        searched = getattr(job.request, "article", "") or ""
+        brand = (job.payload or {}).get("brand", "") if getattr(job, "payload", None) else ""
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+
+            def add():
+                line_id = request.line_id
+                if not line_id:
+                    title = request.request.strip() or " ".join(x for x in (brand, searched) if x)
+                    found = next((ln for ln in quote_service.lines(quote) if ln.get("search") == searched.upper()), None)
+                    if found is None:
+                        found = quote_service.add_line(quote, title, request.qty, search=searched.upper())
+                    line_id = found["id"]
+                return quote_service.add_variant(quote, line_id, offer, sale)
+            quote_call(add)
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.delete("/api/quotes/{quote_id}/lines/{line_id}/variants/{key}")
+    def delete_quote_variant(quote_id: int, line_id: str, key: str, user=Depends(staff_user)):
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            quote_call(lambda: quote_service.remove_variant(quote, line_id, key))
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.post("/api/quotes/{quote_id}/send")
+    def send_quote(quote_id: int, request: QuoteSendRequest, user=Depends(staff_user)):
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            quote_call(lambda: quote_service.send(quote, request.hours))
+            session.commit()
+            return quote_service.manager_view(quote)
+
+    @app.post("/api/quotes/{quote_id}/order")
+    def order_from_quote(quote_id: int, user=Depends(staff_user)):
+        """Выбор клиента -> заказ-черновик: выбранный вариант — позиция, остальные варианты позиции —
+        запасные (замена варианта в карточке заказа). Цены перепроверяются, как у любого заказа."""
+        from cart_store import DraftCart
+
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            picked = quote_service.chosen_offers(quote)
+            if not picked:
+                raise HTTPException(status_code=400, detail="клиент ещё ничего не выбрал")
+            if quote.order_id:
+                raise HTTPException(status_code=400, detail=f"заказ уже оформлен: {quote.order_id}")
+            client_fields = {"name": quote.client_name, "vin": ""}
+            if quote.client_id:
+                client = session.get(db.Client, quote.client_id)
+                vehicle = session.get(db.Vehicle, quote.vehicle_id) if quote.vehicle_id else None
+                client_fields = client_service.order_client_fields(client, vehicle)
+            comment = " ".join(x for x in (f"Подбор «{quote.title}»", (quote.data or {}).get("client_comment", "")) if x)
+        engine = engine_for(user["organization_id"])
+        cart = DraftCart()
+        with engine.lock:
+            engine.draft_cart, engine._log_callback = cart, None
+            try:
+                for _line, offer, qty, alternatives in picked:
+                    engine.displayed_data = alternatives
+                    engine._add_item_to_draft_cart(offer, qty)
+            finally:
+                engine.draft_cart, engine.displayed_data = None, []
+            if not cart.rows():
+                raise HTTPException(status_code=400, detail="выбранные варианты не удалось добавить в заказ")
+            order = order_from_cart(engine, user, cart, client_fields, comment=comment)
+        with Session() as session:
+            quote = _quote(session, user, quote_id)
+            quote.order_id, quote.status = order["order_id"], "ordered"
+            session.commit()
+        return {"order": _order_view(order)}
+
+    # публичная часть: клиент по ссылке, без входа
+
+    @app.get("/q/{token}")
+    def quote_page(token: str):
+        return FileResponse(os.path.join(STATIC, "quote.html"))
+
+    def _public_quote(session, token):
+        quote = session.query(db.Quote).filter_by(token=token).first()
+        if quote is None or quote.status == "draft":
+            raise HTTPException(status_code=404, detail="подбор не найден или ещё не отправлен")
+        return quote
+
+    def _warranty_lookup(org):
+        table = ((org.settings or {}).get("brand_warranty") or search_service.default_warranty()).get("brands", {})
+
+        def lookup(brand):
+            w = table.get(search_service._brand_key(brand))
+            return {"warranty": w["warranty"], "rating": w["rating"]} if w else None
+        return lookup
+
+    @app.get("/api/public/quote/{token}")
+    def public_quote(token: str):
+        with Session() as session:
+            quote = _public_quote(session, token)
+            org = session.get(db.Organization, quote.organization_id)
+            if quote.viewed_at is None:
+                quote.viewed_at = db.utcnow()
+                if quote.status == "sent":
+                    quote.status = "viewed"
+                session.commit()
+            return quote_service.public_view(quote, org.name, _warranty_lookup(org))
+
+    @app.post("/api/public/quote/{token}/choose")
+    def public_choose(token: str, request: QuoteChoiceRequest):
+        with Session() as session:
+            quote = _public_quote(session, token)
+            org = session.get(db.Organization, quote.organization_id)
+            quote_call(lambda: quote_service.choose(quote, request.choices, request.comment, request.contact))
+            chosen = sum(1 for ln in quote_service.lines(quote) if ln.get("choice") and ln["choice"] != "skip")
+            session.add(db.Notification(organization_id=quote.organization_id, kind="quote_chosen", payload={
+                "quote_id": quote.id, "title": quote.title, "client": quote.client_name, "chosen": chosen,
+                "positions": len(quote_service.lines(quote)), "comment": request.comment[:200]}))
+            session.commit()
+            return quote_service.public_view(quote, org.name, _warranty_lookup(org))
 
     # ----- замена варианта позиции (из групп заказа, как кнопка «Выбрать вариант» в десктопе) -----
 
@@ -1411,6 +1678,17 @@ def create_app(var_dir=None, database_url=None):
 
         start_job(job, work)
         return {"job_id": job.id}
+
+    @app.get("/api/notifications/other")
+    def other_notifications(after: int = -1, user=Depends(staff_user)):
+        """Прочие уведомления организации (клиент выбрал варианты в подборе): after — последний показанный id;
+        при первом входе — только номер последнего, без старых сообщений."""
+        with Session() as session:
+            rows = session.query(db.Notification).filter(db.Notification.organization_id == user["organization_id"])
+            last = rows.order_by(db.Notification.id.desc()).first()
+            items = [] if after < 0 else rows.filter(db.Notification.id > after).order_by(db.Notification.id).limit(20).all()
+            return {"last_id": last.id if last else 0, "items": [
+                {"id": n.id, "kind": n.kind, "at": n.at.isoformat(timespec="seconds"), **(n.payload or {})} for n in items]}
 
     @app.get("/api/notifications")
     def notifications(after: int = -1, user=Depends(current_user)):

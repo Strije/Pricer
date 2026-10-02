@@ -231,7 +231,8 @@
     const value = Number(o.actual_order_quantity) || min;
     if (!o.internal_offer_id) return "";
     return `<span class="buy"><input type="number" min="${min}" step="${step}" value="${value}" data-qty="${esc(o.internal_offer_id)}" aria-label="Количество">
-      <button class="secondary cart-add" data-add="${esc(o.internal_offer_id)}" title="В корзину"${o.can_order_quantity === false ? " disabled" : ""}>🛒</button></span>`;
+      <button class="secondary cart-add" data-add="${esc(o.internal_offer_id)}" title="В корзину"${o.can_order_quantity === false ? " disabled" : ""}>🛒</button>
+      <button class="secondary quote-add" data-quote="${esc(o.internal_offer_id)}" title="В подбор для клиента">📋</button></span>`;
   }
 
   function groupCard(list) {
@@ -266,6 +267,10 @@
 
   function bindRows(root) {
     root.querySelectorAll("[data-add]").forEach((b) => b.onclick = () => addToCart(b.dataset.add, b, root));
+    root.querySelectorAll("[data-quote]").forEach((b) => b.onclick = () => {
+      const input = root.querySelector(`[data-qty="${CSS.escape(b.dataset.quote)}"]`);
+      addToQuote(S.job, b.dataset.quote, Number(input && input.value) || 1, b);
+    });
     root.querySelectorAll("[data-more]").forEach((b) => b.onclick = () => {
       S.expanded.has(b.dataset.more) ? S.expanded.delete(b.dataset.more) : S.expanded.add(b.dataset.more); renderAll();
     });

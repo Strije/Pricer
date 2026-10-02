@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Подбор запчастей</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #172033; --muted: #64748b; --line: #e2e8f0;
+    --accent: #2563eb; --accent-soft: #dbeafe; --ok: #15803d; --ok-soft: #dcfce7;
+    --warn: #b45309; --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1420; --panel: #171e2c; --text: #e5e9f0; --muted: #94a3b8; --line: #2a3446;
+      --accent: #60a5fa; --accent-soft: #1e3a5f; --ok: #4ade80; --ok-soft: #14321f;
+      --warn: #fbbf24; --warn-soft: #3b2f12; --bad: #f87171; --bad-soft: #3b1717;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px 16px 120px; }
+  h1 { font-size: 20px; margin: 4px 0; } .muted { color: var(--muted); font-size: 13px; }
+  .banner { border-radius: 10px; padding: 10px 12px; margin: 12px 0; font-size: 14px; }
+  .banner.warn { background: var(--warn-soft); color: var(--warn); } .banner.ok { background: var(--ok-soft); color: var(--ok); }
+  .line { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 12px 0; }
+  .line h2 { font-size: 16px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 8px; }
+  .opt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; cursor: pointer; }
+  .opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .opt input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; }
+  .opt .body { flex: 1; min-width: 0; } .opt .price { font-weight: 700; font-size: 17px; white-space: nowrap; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); }
+  .tag.w { background: #f7941d; color: #fff; } .tag.bad { background: var(--bad-soft); color: var(--bad); }
+  .tag.an { background: #ede9fe; color: #6d28d9; }
+  img.photo { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; background: #fff; flex: 0 0 auto; }
+  textarea, input[type=text] { width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  label.f { display: block; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); padding: 10px 16px; }
+  .bar .in { max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .total { font-size: 18px; font-weight: 700; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 12px 20px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; }
+  .msg { color: var(--bad); font-size: 14px; margin-top: 8px; } .msg.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <div class="muted" id="org"></div>
+  <h1 id="title">Подбор запчастей</h1>
+  <div class="muted" id="client"></div>
+  <div id="banner"></div>
+  <div id="lines"><p class="muted">Загружаю…</p></div>
+  <div id="extra" hidden>
+    <label class="f">Комментарий для менеджера <textarea id="comment" rows="2" placeholder="Например: аналог устраивает, нужно к пятнице"></textarea></label>
+    <label class="f">Как с вами связаться (если менеджер не знает) <input type="text" id="contact" placeholder="Телефон или мессенджер"></label>
+  </div>
+  <div class="msg" id="msg"></div>
+</main>
+<div class="bar" id="bar" hidden><div class="in">
+  <div><div class="muted">Итого по выбранному</div><div class="total" id="total">0 ₽</div></div>
+  <button id="send">Отправить выбор</button>
+</div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const money = (v) => Number(v || 0).toLocaleString("ru-RU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const term = (h) => h == null || h >= 999999 * 24 ? "срок уточнит менеджер" : h < 24 ? "сегодня" : `${Math.ceil(h / 24)} дн.`;
+const token = location.pathname.split("/").pop();
+let quote = null;
+
+async function call(method, url, body) {
+  const resp = await fetch(url, {method, headers: {"X-Requested-With": "pricer", "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined});
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.detail || "ошибка " + resp.status);
+  return data;
+}
+function cups(r) { const n = Math.max(0, Math.min(5, Math.round(r || 0))); return "🏆".repeat(n); }
+
+function render() {
+  $("org").textContent = quote.organization; $("title").textContent = quote.title; document.title = quote.title;
+  $("client").textContent = quote.client ? `Для: ${quote.client}` : "";
+  const until = quote.expires_at ? new Date(quote.expires_at + "Z").toLocaleString("ru-RU", {day: "numeric", month: "long", hour: "2-digit", minute: "2-digit"}) : "";
+  $("banner").innerHTML = quote.locked ? `<div class="banner ok">Заказ оформлен — спасибо! Менеджер свяжется с вами.</div>`
+    : quote.status === "chosen" ? `<div class="banner ok">Выбор отправлен менеджеру. Пока заказ не оформлен, выбор можно поменять.</div>`
+    : quote.expired ? `<div class="banner warn">Цены были действительны до ${esc(until)}. Выбрать можно — менеджер перепроверит цены и наличие.</div>`
+    : until ? `<div class="banner ok">Цены действительны до ${esc(until)}</div>` : "";
+  $("lines").innerHTML = quote.lines.map((line) => `<div class="line">
+      <h2><span>${esc(line.request)}</span><span class="muted">${line.qty} шт.</span></h2>
+      ${line.variants.map((v) => `<label class="opt">
+        <input type="radio" name="l-${line.id}" value="${esc(v.key)}" ${line.choice === v.key ? "checked" : ""} ${quote.locked ? "disabled" : ""}>
+        ${v.image_url ? `<img class="photo" src="${esc(v.image_url)}" alt="" loading="lazy">` : ""}
+        <span class="body"><strong>${esc(v.brand)} ${esc(v.article)}</strong><div class="muted">${esc(v.name)}</div>
+          <span class="tags"><span class="tag ${v.kind === "аналог" ? "an" : ""}">${esc(v.kind)}</span><span class="tag">${esc(term(v.delivery_hours))}</span>
+          ${v.warranty ? `<span class="tag w">${esc(v.warranty.warranty)}</span><span title="рейтинг бренда">${cups(v.warranty.rating)}</span>` : ""}
+          ${v.returnable ? "" : '<span class="tag bad">без возврата</span>'}</span></span>
+        <span class="price">${money(v.sale_price)} ₽</span></label>`).join("")}
+      <label class="opt"><input type="radio" name="l-${line.id}" value="skip" ${line.choice === "skip" ? "checked" : ""} ${quote.locked ? "disabled" : ""}>
+        <span class="body muted">Не нужно</span></label>
+    </div>`).join("") || '<p class="muted">В подборе пока нет позиций.</p>';
+  $("comment").value = quote.client_comment || $("comment").value;
+  $("extra").hidden = $("bar").hidden = quote.locked;
+  document.querySelectorAll('#lines input[type=radio]').forEach((r) => r.onchange = updateTotal);
+  updateTotal();
+}
+function choices() {
+  const out = {};
+  for (const line of quote.lines) { const r = document.querySelector(`input[name="l-${line.id}"]:checked`); if (r) out[line.id] = r.value; }
+  return out;
+}
+function updateTotal() {
+  const picked = choices(); let total = 0;
+  for (const line of quote.lines) { const v = line.variants.find((x) => x.key === picked[line.id]); if (v) total += v.sale_price * line.qty; }
+  $("total").textContent = money(total) + " ₽";
+}
+$("send").onclick = async () => {
+  $("send").disabled = true; $("msg").className = "msg"; $("msg").textContent = "";
+  try {
+    quote = await call("POST", `/api/public/quote/${encodeURIComponent(token)}/choose`, {choices: choices(), comment: $("comment").value, contact: $("contact").value});
+    render(); $("msg").className = "msg ok"; $("msg").textContent = "Готово! Менеджер получил ваш выбор.";
+    window.scrollTo({top: 0, behavior: "smooth"});
+  } catch (err) { $("msg").textContent = err.message; }
+  $("send").disabled = false;
+};
+call("GET", `/api/public/quote/${encodeURIComponent(token)}`).then((q) => { quote = q; render(); })
+  .catch((err) => { $("lines").innerHTML = `<p class="msg">${esc(err.message)}</p>`; });
+</script>
+</body>
+</html>

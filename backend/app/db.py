@@ -170,6 +170,38 @@ class SupplierLineEvent(Base):
     line: Mapped[SupplierLine] = relationship(back_populates="events")
 
 
+class Quote(Base):
+    """Подбор для клиента: позиции по запросу клиента, в каждой — варианты из выдачи; клиент выбирает
+    по ссылке без входа (token), менеджер превращает выбор в заказ."""
+    __tablename__ = "quotes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id"), nullable=True)
+    client_name: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|sent|viewed|chosen|ordered|cancelled
+    data: Mapped[dict] = mapped_column(JSON, default=dict)  # {lines: [...], client_comment, contact}
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    viewed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    chosen_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    order_id: Mapped[str] = mapped_column(String(40), default="")
+
+
+class Notification(Base):
+    """Уведомление организации (клиент выбрал варианты в подборе и т.п.) для всплывающих сообщений."""
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Cart(Base):
     """Корзина пользователя (в десктопе — DraftCart в памяти окна): строки в формате DraftCart."""
     __tablename__ = "carts"
