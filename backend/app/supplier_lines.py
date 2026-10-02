@@ -377,9 +377,21 @@ def refresh_from_supplier(fetch_rows, days=60):
 def refresh_abcp(session, organization_id, provider, provider_name):
     """Статусы позиций поставщика на ABCP (orders): positionId и supplierCode десктопа, номер заказа,
     бренд и номер; частичная поставка (quantity меньше quantityOrdered) — частичный отказ."""
-    from supplier_orders import abcp_orders
+    from supplier_orders import abcp_orders, abcp_orders_by_numbers
 
-    return refresh_from_supplier(abcp_orders)(session, organization_id, provider, provider_name)
+    def fetch_rows(provider, since):
+        rows = abcp_orders(provider, since)
+        # Учётка не видит общий список (у Элит Ойл: 301 «Заказы не найдены») — спрашиваем
+        # наши заказы по номерам из ответа на оформление.
+        known = {str(row.get("order") or "") for row in rows}
+        missing = [line.supplier_ref for line in session.query(db.SupplierLine).filter(
+            db.SupplierLine.organization_id == organization_id, db.SupplierLine.provider == provider_name,
+            db.SupplierLine.closed.is_(False), db.SupplierLine.supplier_ref != "") if line.supplier_ref not in known]
+        if missing and hasattr(provider, "_request"):
+            rows += abcp_orders_by_numbers(provider, missing)
+        return rows
+
+    return refresh_from_supplier(fetch_rows)(session, organization_id, provider, provider_name)
 
 
 def fetcher_for(provider):

@@ -174,17 +174,90 @@ def test_abcp_partial_delivery(http):
         ("900", 1, True, "P1"), ("900", 3, False, "P1")]
 
 
-def test_prlg_and_mikado(http):
+def test_prlg(http):
     http({"pages": 1, "data": [{"order_id": "L1", "datetime": "2026-09-05 10:00:00", "products": [
         {"article": "OC90", "brand": "KNECHT", "quantity": 1, "status": "Отказ", "status_id": "6"}]}]})
     rows = so.prlg_orders(P(api_key="s"), SINCE)
     assert rows[0]["refused"] and rows[0]["order"] == "L1"
-    http("""<?xml version="1.0"?><ArrayOfBasketItem xmlns="http://mikado-parts.ru/service">
-<BasketItem><ID>11</ID><ZakazCode>KN-OC90</ZakazCode><Name>Фильтр</Name><QTY>2</QTY><Status>Zakaz</Status>
+
+
+MIKADO_BASKET = """<?xml version="1.0"?><ArrayOfBasketItem xmlns="http://mikado-parts.ru/service">
+<BasketItem><ID>11</ID><ZakazCode>KN-OC90</ZakazCode><Name>Фильтр\x01</Name><QTY>2</QTY><Status>Zakaz</Status>
 <Srok>3 дня</Srok></BasketItem><BasketItem><ID>12</ID><ZakazCode>XX-1</ZakazCode><Status>Basket</Status></BasketItem>
-<BasketItem><ID>13</ID><ZakazCode>MN-W712</ZakazCode><QTY>1</QTY><Status>Otkaz</Status></BasketItem></ArrayOfBasketItem>""")
+<BasketItem><ID>13</ID><ZakazCode>MN-W712</ZakazCode><QTY>1</QTY><Status>Otkaz</Status></BasketItem></ArrayOfBasketItem>"""
+MIKADO_LIST = """<?xml version="1.0"?><ArrayOfCDelivery xmlns="http://mikado-parts.ru/ws1/">
+<cDelivery><DelNumber>6139337</DelNumber><DelDate>2026-10-01T18:00:00</DelDate><DelType>Со_склада</DelType></cDelivery>
+<cDelivery><DelNumber>6100001</DelNumber><DelDate>2026-09-20T10:00:00</DelDate><DelType>Возврат</DelType></cDelivery>
+</ArrayOfCDelivery>"""
+MIKADO_INFO = """<?xml version="1.0"?><ArrayOfCDeliveryLine xmlns="http://mikado-parts.ru/ws1/">
+<cDeliveryLine><Code>xzk-lf-1495</Code><producer>XZK</producer><ProducerCode></ProducerCode><Name>Фильтр</Name>
+<QTY>1</QTY><Status>OK</Status><ZakazID>777</ZakazID><Comment>ORD-20261001-0003</Comment></cDeliveryLine>
+<cDeliveryLine><Code>kn-oc90</Code><ZakazID>11</ZakazID><QTY>2</QTY><Status>OK</Status></cDeliveryLine>
+<cDeliveryLine><Code>bs-1</Code><producer>BOSCH</producer><ProducerCode>0986452041</ProducerCode><QTY>1</QTY>
+<Status>Брак</Status></cDeliveryLine></ArrayOfCDeliveryLine>"""
+
+
+def test_mikado_basket_and_deliveries(http):
+    fake = http(MIKADO_BASKET, MIKADO_LIST, MIKADO_INFO)
     rows = so.mikado_orders(P(client_id="1", password="p"), SINCE)
-    assert [(r["article"], r["refused"]) for r in rows] == [("OC90", False), ("W712", True)]
+    assert [c[1].rsplit("/", 2)[-2:] for c in fake.calls] == [
+        ["basket.asmx", "Basket_List"], ["deliveries.asmx", "Delivery_List"], ["deliveries.asmx", "Delivery_Info"]]
+    assert fake.calls[1][2]["data"]["Date_From"] == "2026-09-01T00:00:00" and fake.calls[1][2]["data"]["nClientID"] == "1"
+    assert fake.calls[2][2]["data"]["DeliveryID"] == "6139337"  # возврат не запрашивается
+    assert [(r["article"], r["refused"]) for r in rows] == [("OC90", False), ("W712", True), ("lf-1495", False),
+                                                           ("0986452041", True)]  # ZakazID 11 уже в корзине
+    shipped = rows[2]
+    assert shipped["status"].startswith("отгружено") and shipped["date"] == "2026-10-01T18:00:00"
+    assert shipped["brand"] == "XZK" and shipped["comment"] == "ORD-20261001-0003"
+    assert normalize_status(shipped["status"]) == "in_transit"
+
+
+def test_mikado_mirror_on_404(http):
+    fake = http(Response("nf", 404), MIKADO_BASKET, MIKADO_LIST.replace("6139337", "x").replace("Со_склада", "Возврат"))
+    so.mikado_orders(P(client_id="1", password="p"), SINCE)
+    assert fake.calls[1][1].startswith("https://polomkam.net/ws1/basket.asmx")
+
+
+class AbcpProvider:
+    """Как AbcpSupplierProvider: _request -> данные или None с last_message."""
+
+    def __init__(self, answers):
+        self.answers, self.calls, self.last_message = answers, [], ""
+
+    def _request(self, method, path, params=None):
+        self.calls.append((path, dict(params or {})))
+        answer = self.answers.get(path)
+        if isinstance(answer, str):
+            self.last_message = "Элит Ойл: " + answer
+            return None
+        self.last_message = ""
+        return answer
+
+
+def test_abcp_301_is_empty_other_errors_raise():
+    assert so.abcp_orders(AbcpProvider({"orders": "301: Заказы не найдены"}), SINCE) == []
+    with pytest.raises(RuntimeError, match="102"):
+        so.abcp_orders(AbcpProvider({"orders": "102: неверный логин"}), SINCE)
+
+
+def test_abcp_by_numbers():
+    provider = AbcpProvider({"orders/list": {"5501": {"number": "5501", "date": "2025-01-01 10:00:00", "positions": [
+        {"positionId": "P1", "brand": "VAG", "number": "04E115561H", "quantityOrdered": 1, "quantity": 1, "status": "В пути"}]}}})
+    rows = so.abcp_orders_by_numbers(provider, ["5501", "5501", ""])
+    assert provider.calls == [("orders/list", {"orders[0]": "5501"})]
+    assert rows[0]["order"] == "5501" and rows[0]["position_id"] == "P1"  # дата заказа не отсекает
+
+
+def test_abcp_refresh_falls_back_to_numbers(org_session):
+    from app.supplier_lines import refresh_abcp
+
+    session, org = org_session
+    line = _line(session, org, 0, provider="Элит Ойл", brand="VAG", article="04E115561H", supplier_ref="5501",
+                 submitted_at=db.utcnow())
+    provider = AbcpProvider({"orders": "301: Заказы не найдены", "orders/list": [{"number": "5501", "positions": [
+        {"brand": "VAG", "number": "04E115561H", "quantity": 1, "status": "Готово к выдаче"}]}]})
+    assert refresh_abcp(session, org, provider, "Элит Ойл") == 1
+    assert line.status == "arrived" and [c[0] for c in provider.calls] == ["orders", "orders/list"]
 
 
 def test_fetchers_cover_desktop_providers():

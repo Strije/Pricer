@@ -234,6 +234,9 @@ def record_statuses(providers, recorder, backend_dir, days):
     import supplier_orders
 
     since = datetime.date.today() - datetime.timedelta(days=days)
+    sent = desktop_submissions(since)
+    print("отправлено из программы за период (позиций): " +
+          (", ".join(f"{name} {len(items)}" for name, items in sorted(sent.items())) or "нет"))
     for provider in providers:
         name = getattr(provider, "DISPLAY_NAME", "") or type(provider).__name__
         fetch = supplier_orders.fetcher_for(provider)
@@ -247,10 +250,40 @@ def record_statuses(providers, recorder, backend_dir, days):
             recorder.write({"type": "statuses_result", "provider": name, "rows": rows})
             refused = sum(1 for row in rows if row.get("refused"))
             print(f"{name}: строк {len(rows)}, отказов {refused}")
+            numbers = sorted({n for n in sent.get(name, []) if n})
+            if fetch is supplier_orders.abcp_orders and numbers:
+                # Проверка запасного пути: наши заказы по номерам из ответа на оформление (orders/list).
+                by_numbers = supplier_orders.abcp_orders_by_numbers(provider, numbers)
+                recorder.write({"type": "statuses_result", "provider": name, "method": "orders/list",
+                                "numbers": len(numbers), "rows": by_numbers})
+                print(f"{name}: по номерам заказов ({len(numbers)} шт.) строк {len(by_numbers)}")
         except Exception as exc:
             recorder.write({"type": "statuses_result", "provider": name, "error": f"{type(exc).__name__}: {exc}"})
             print(f"{name}: ошибка {type(exc).__name__}: {str(exc)[:150]}")
     return 0
+
+
+def desktop_submissions(since):
+    """Позиции, отправленные из программы с даты since: поставщик -> номера заказов у поставщика."""
+    try:
+        from config_path import get_orders_dir
+        from order_store import OrderStore
+
+        orders = OrderStore(get_orders_dir()).list_orders()
+    except Exception as exc:
+        print(f"история заказов программы не прочитана: {exc}")
+        return {}
+    result = {}
+    for order in orders:
+        for item in order.get("items") or []:
+            if str(item.get("submit_status") or "") not in ("submitted", "unknown"):
+                continue
+            if str(item.get("submitted_at") or "")[:10] < since.isoformat():
+                continue
+            response = item.get("supplier_response") or {}
+            number = str(response.get("order_number") or response.get("external_order_id") or "")
+            result.setdefault(str(item.get("provider") or ""), []).append(number)
+    return result
 
 
 def verify_no_secrets(path, secrets):

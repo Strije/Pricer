@@ -10,6 +10,7 @@
 """
 import datetime
 import json
+import re
 import xml.etree.ElementTree as ET
 
 import requests
@@ -306,49 +307,72 @@ def abcp_is_refusal(status):
     return any(word in text for word in ABCP_REFUSAL_WORDS)
 
 
+def _abcp_rows(orders, since=None):
+    """Строки поставщика из заказов ABCP (СтрокиЗаказаABCP): недопоставленное и отказные статусы — отказом.
+    Возвращает строки и признак, были ли заказы не старше since."""
+    rows, fresh = [], False
+    since_iso = datetime.datetime.combine(since, datetime.time()).isoformat() if since else ""
+    for order in orders:
+        date = _date(_s(order, "date"), "%Y-%m-%d %H:%M:%S")
+        if since_iso and date and date < since_iso:
+            continue
+        fresh = True
+        for p in _items(order.get("positions")):
+            ordered, final = _num(p.get("quantityOrdered")), _num(p.get("quantity"))
+            ordered = ordered or final
+            status = _s(p, "status")
+            refused = abcp_is_refusal(status)
+            cancelled = ordered if refused else max(ordered - final, 0)
+            base = (_s(order, "number"), date, _s(p, "numberFix") or _s(p, "number"), _s(p, "brand"), _s(p, "description"))
+            comment = (_s(p, "comment") + " " + _s(order, "comment")).strip()
+            parts = ([(0, status, refused)] if not ordered  # количества нет — строка без количества
+                     else [(cancelled, status if refused else "снято: " + status, True),
+                           (ordered - cancelled, status, False)])
+            for quantity, text, is_refused in parts:
+                if ordered and quantity <= 0:
+                    continue
+                row = _row(*base, quantity, text, is_refused, comment)
+                row["position_id"], row["supplier_code"] = _s(p, "positionId") or _s(p, "id"), _s(p, "supplierCode")
+                rows.append(row)
+    return rows, fresh
+
+
+def _abcp_list(data, provider):
+    """Список заказов из ответа; 301 «Заказы не найдены» — пустой список, другие ошибки — исключение."""
+    if data is None:
+        message = str(getattr(provider, "last_message", "") or "")
+        if message and "301" not in message and "не найден" not in message.lower():
+            raise RuntimeError(message)
+        return []
+    if isinstance(data, dict) and "items" in data:
+        data = data["items"]
+    return _items(data)
+
+
 def abcp_orders(provider, since):
-    """orders постранично (ЗаказыABCP, СтрокиЗаказаABCP): недопоставленное и отказные статусы — отказом."""
+    """orders постранично (ЗаказыABCP): заказы учётки за период."""
     rows = []
     for page in range(20):
-        if callable(getattr(provider, "get_orders", None)):
-            data = provider.get_orders(limit=100, skip=page * 100)
+        if callable(getattr(provider, "get_orders", None)) and not hasattr(provider, "_request"):
+            data = provider.get_orders(limit=100, skip=page * 100)  # тестовые и упрощённые адаптеры
         else:
             data = provider._request("GET", "orders", {"format": "p", "limit": 100, "skip": page * 100})
-        if isinstance(data, dict) and "items" in data:
-            data = data["items"]
-        orders = _items(data)
-        further = False
-        for order in orders:
-            date = _date(_s(order, "date"), "%Y-%m-%d %H:%M:%S")
-            if date and date < datetime.datetime.combine(since, datetime.time()).isoformat():
-                continue
-            further = True
-            for p in _items(order.get("positions")):
-                ordered, final = _num(p.get("quantityOrdered")), _num(p.get("quantity"))
-                ordered = ordered or final
-                status = _s(p, "status")
-                refused = abcp_is_refusal(status)
-                cancelled = ordered if refused else max(ordered - final, 0)
-                row_comment = (_s(p, "comment") + " " + _s(order, "comment")).strip()
-                article = _s(p, "numberFix") or _s(p, "number")
-                if not ordered:  # количества нет — строка без количества (сопоставитель так и поймёт)
-                    row = _row(_s(order, "number"), date, article, _s(p, "brand"), _s(p, "description"), 0,
-                               status, refused, row_comment)
-                    row["position_id"], row["supplier_code"] = _s(p, "positionId") or _s(p, "id"), _s(p, "supplierCode")
-                    rows.append(row)
-                    continue
-                if cancelled > 0:
-                    row = _row(_s(order, "number"), date, article, _s(p, "brand"), _s(p, "description"), cancelled,
-                               status if refused else "снято: " + status, True, row_comment)
-                    row["position_id"], row["supplier_code"] = _s(p, "positionId") or _s(p, "id"), _s(p, "supplierCode")
-                    rows.append(row)
-                if ordered - cancelled > 0:
-                    row = _row(_s(order, "number"), date, article, _s(p, "brand"), _s(p, "description"),
-                               ordered - cancelled, status, False, row_comment)
-                    row["position_id"], row["supplier_code"] = _s(p, "positionId") or _s(p, "id"), _s(p, "supplierCode")
-                    rows.append(row)
-        if not further or len(orders) < 100:
+        orders = _abcp_list(data, provider)
+        page_rows, fresh = _abcp_rows(orders, since)
+        rows.extend(page_rows)
+        if not fresh or len(orders) < 100:
             break
+    return rows
+
+
+def abcp_orders_by_numbers(provider, numbers):
+    """orders/list по номерам заказов (как карточка заказа в приложении Abcp): запасной путь, когда
+    общий список orders учётке ничего не отдаёт (ошибка 301 «Заказы не найдены»)."""
+    rows = []
+    numbers = list(dict.fromkeys(str(n).strip() for n in numbers if str(n or "").strip()))
+    for start in range(0, len(numbers), 20):
+        params = {f"orders[{i}]": number for i, number in enumerate(numbers[start:start + 20])}
+        rows.extend(_abcp_rows(_abcp_list(provider._request("GET", "orders/list", params), provider))[0])
     return rows
 
 
@@ -387,8 +411,14 @@ def prlg_orders(provider, since):
 
 # ---------- Микадо ----------
 
+MIKADO_HOSTS = ("https://www.mikado-parts.ru/ws1", "https://polomkam.net/ws1")
+_XML_JUNK = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def _mikado_records(text, record_name):
-    root = ET.fromstring(text)
+    """Записи XML-ответа asmx по локальному имени (пространства имён у сервисов разные).
+    Микадо присылает в названиях управляющие символы — их убираем до разбора (ОчиститьXML в 1С)."""
+    root = ET.fromstring(_XML_JUNK.sub(" ", text).encode("utf-8"))
     out = []
     for element in root.iter():
         if _local(element) == record_name:
@@ -396,23 +426,62 @@ def _mikado_records(text, record_name):
     return out
 
 
-def mikado_orders(provider, since):
-    """Basket_List (ЗаказыМикадоДляКонтроля): Zakaz — под заказ, Stock — со склада Микадо, Otkaz — отказ.
-    Бренда в ответе нет: ZakazCode вида «ПРЕФИКС-код», сопоставление по артикулу."""
-    response = _session().post("https://www.mikado-parts.ru/ws1/basket.asmx/Basket_List",
-                               data={"ClientID": provider.client_id, "Password": provider.password}, timeout=TIMEOUT)
+def _mikado_call(service, method, data):
+    """POST к asmx; первый адрес Микадо, при 404 — зеркало, как в настройках 1С."""
+    response = None
+    for host in MIKADO_HOSTS:
+        response = _session().post(f"{host}/{service}/{method}", data=data, timeout=TIMEOUT)
+        if response.status_code != 404:
+            break
     response.raise_for_status()
-    rows = []
+    return response.text
+
+
+def _article_from_code(code):
+    """Код Микадо — артикул с префиксом бренда («KN-OC90»): артикул после первого дефиса."""
+    return code.split("-", 1)[1] if "-" in code else code
+
+
+def mikado_orders(provider, since, max_deliveries=80):
+    """Как ЗаказыМикадоДляКонтроля в 1С: корзина (Basket_List) — заказанное и ещё не отгруженное
+    (Zakaz — под заказ, Stock — со склада Микадо, Otkaz — отказ); отгрузки за период
+    (deliveries.asmx: Delivery_List + Delivery_Info) — уже отгруженное. Одна позиция (ZakazID) — один раз."""
+    rows, seen = [], set()
     labels = {"Zakaz": "заказано, срок ", "Stock": "со склада Микадо, срок "}
-    for record in _mikado_records(response.text, "BasketItem"):
+    basket = _mikado_call("basket.asmx", "Basket_List", {"ClientID": provider.client_id, "Password": provider.password})
+    for record in _mikado_records(basket, "BasketItem"):
         status = record.get("Status", "")
         if status not in ("Zakaz", "Stock", "Otkaz"):
             continue
-        code = record.get("ZakazCode", "")
-        article = code.split("-", 1)[1] if "-" in code else code
+        if record.get("ID"):
+            seen.add(record["ID"])
         text = "отказ Микадо" if status == "Otkaz" else labels[status] + record.get("Srok", "")
-        rows.append(_row("корзина " + record.get("ID", ""), None, article, "", record.get("Name", ""),
-                         _num(record.get("QTY")), text, status == "Otkaz", record.get("Notes", "")))
+        rows.append(_row("корзина " + record.get("ID", ""), None, _article_from_code(record.get("ZakazCode", "")), "",
+                         record.get("Name", ""), _num(record.get("QTY")), text, status == "Otkaz", record.get("Notes", "")))
+
+    auth = {"nClientID": provider.client_id, "Password": provider.password}
+    listing = _mikado_call("deliveries.asmx", "Delivery_List", {
+        **auth, "Date_From": since.strftime("%Y-%m-%dT00:00:00"),
+        "Date_To": datetime.date.today().strftime("%Y-%m-%dT23:59:59")})
+    deliveries = [d for d in _mikado_records(listing, "cDelivery") if "возв" not in d.get("DelType", "").lower()]
+    for delivery in deliveries[-max_deliveries:]:
+        number = delivery.get("DelNumber", "")
+        date = _date(delivery.get("DelDate"), "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
+        info = _mikado_call("deliveries.asmx", "Delivery_Info", {**auth, "DeliveryID": number})
+        for line in _mikado_records(info, "cDeliveryLine"):
+            zakaz_id = line.get("ZakazID", "")
+            if zakaz_id:
+                if zakaz_id in seen:
+                    continue  # «Поставка» с нулевой суммой и её сборная — одна и та же позиция
+                seen.add(zakaz_id)
+            line_status = line.get("Status", "").strip().upper()
+            refused = line_status not in ("", "OK", "ОК")
+            rows.append(_row("отгрузка " + number, date,
+                             line.get("ProducerCode") or _article_from_code(line.get("Code", "")),
+                             line.get("producer", ""), line.get("Name", ""), _num(line.get("QTY")),
+                             ("отгружено" if not refused else "не отгружено: " + line.get("Status", "")) +
+                             f" ({delivery.get('DelType') or 'отгрузка'} {number})", refused,
+                             (line.get("Comment", "") + " " + line.get("UserInfo", "")).strip()))
     return rows
 
 
