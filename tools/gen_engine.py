@@ -13,6 +13,8 @@ ROOTS = [
     "_skip_order_item", "_restore_order_item", "_replace_order_item_with_variant",
     # корзина: добавление с запасом вариантов, статус позиции
     "_add_item_to_draft_cart", "_cart_status_text",
+    # интерактивный поиск «Проценки»: бренды по ответам поставщиков, опрос всех, кроссы, ★
+    "_resolve_brand_and_run", "run_query",
 ]
 # Методы интерфейса: вместо них в движке свои реализации (см. шапку класса ниже).
 UI_METHODS = {"add_log", "_refresh_orders_page", "_refresh_article_suggestion_orders",
@@ -38,6 +40,25 @@ for m in sorted(set(names), key=lambda m: methods[m].lineno):
     copied.append(block(n.lineno, n.end_lineno))
 body = "\n\n".join(copied)
 body = body.replace("self.log_signal.emit(", "self._log(")
+# Сигналы окна поиска -> обратные вызовы движка (веб получает их через SSE).
+for _sig in ("search_results_ready", "search_provider_status", "search_progress", "search_completed_for"):
+    body = body.replace(f"self.{_sig}.emit(", f"self._{_sig}(")
+# Выбор бренда: в десктопе — диалог посреди потока поиска; в вебе — отдельный шаг. Метод
+# возвращает варианты (BrandChoice) и статистику, а поиск по выбранному запускает search_offers.
+_tail = """        if not labels:
+            self._selected_brand_variants = {}
+            self.run_query(search_id, raw_article, clean_article, "")
+            return
+        self._brand_selection_event = threading.Event()
+        self._selected_brand = ""
+        self.brand_selection_requested.emit(raw_article, labels)
+        self._brand_selection_event.wait()
+        if not self.search_state.is_current(search_id):
+            return
+        self.run_query(search_id, raw_article, clean_article, self._selected_brand)"""
+assert body.count(_tail) == 1, "gen_engine: конец _resolve_brand_and_run изменился"
+body = body.replace(_tail, "        return choices, stats")
+body = body.replace("def _resolve_brand_and_run(", "def _resolve_brand_choices(")
 body = body.replace("self.order_action_finished.emit(", "self._order_action_finished(")
 # Исправление ошибки десктопа 1.0.3: в _apply_variant_to_order_item нет переменной offer
 # (NameError при замене варианта позиции в заказе). Имя берём у нового варианта, иначе прежнее.
@@ -62,6 +83,7 @@ out = f'''"""Движок поиска для заказа из файла, вы
 import datetime
 import math
 import re
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -71,11 +93,14 @@ from abstd import AbstdProvider
 from armtek import ArmtekProvider
 from avtoto import AvtotoProvider
 from brand_aliases import BrandAliasResolver
+from brand_resolver import BrandResolver
 from bulk_order import filter_exact_offers, rank_offers, status_for_selection
+from cross_targets import UNKNOWN_DELIVERY_HOURS, build_cross_targets
 from favorit import FavoritProvider
 from forum_auto import ForumAutoProvider
 from mikado import MikadoProvider
-from offer_normalizer import is_requested_part, normalize_offer
+from offer_normalizer import (deduplicate_offers, is_requested_part, mark_best_offers, normalize_offer,
+                              offer_sort_key, offer_unique_key)
 from order_quantity import quantity_from_item
 from order_store import OrderStore
 from pr_lg import PrLgProvider
@@ -83,8 +108,9 @@ from pricing import DEFAULT_MARKUP_RULES, calculate_sale_price
 from provider_adapter import ProviderAdapter
 from provider_health import ProviderCircuitBreaker
 from provider_result_cache import ProviderResultCache
-from result_limiter import DEFAULT_PROVIDER_LIMITS, normalize_provider_limits
+from result_limiter import DEFAULT_PROVIDER_LIMITS, limit_provider_results, normalize_provider_limits
 from rossko import RosskoProvider
+from search_state import SearchState
 from tiss_tmparts import TissTmpartsProvider
 from tradesoft import TradesoftProvider
 from url_csv_provider import UrlCsvProvider
@@ -141,6 +167,7 @@ class ProcurementEngine:
                  log=None, providers=None, order_store=None, order_history=None):
         self.settings = dict(settings or default_settings())
         self.brand_aliases = brand_aliases or BrandAliasResolver()
+        self.brand_resolver = BrandResolver(self.brand_aliases)
         self.cross_store = cross_store
         self.detailed_logger = detailed_logger
         self._log_callback = log
@@ -148,6 +175,9 @@ class ProcurementEngine:
         self.provider_circuit = ProviderCircuitBreaker(threshold=5, cooldown_seconds=45)
         self._order_file_search_id = 0
         self._selected_brand_variants = {{}}
+        self.search_state = SearchState()
+        self.on_search_event = None  # (вид, данные): results / provider / progress — для SSE
+        self._search_lock = threading.Lock()
         self.on_provider_progress = None
         self.on_order_action = None
         self.order_store = order_store
@@ -155,6 +185,70 @@ class ProcurementEngine:
         self.configure(self.settings)
         if providers is not None:
             self.providers = list(providers)
+
+    # ----- интерактивный поиск (вкладка «Поиск») -----
+
+    def _emit_search(self, kind, data):
+        if self.on_search_event:
+            try:
+                self.on_search_event(kind, data)
+            except Exception:
+                pass  # сбой показа не должен ломать поиск
+
+    def _search_results_ready(self, search_id, results):
+        self._last_search_results = list(results or [])
+        self._emit_search("results", self._last_search_results)
+
+    def _search_provider_status(self, search_id, name, status):
+        self._emit_search("provider", {{"provider": name, "status": status}})
+
+    def _search_progress(self, search_id, value):
+        self._emit_search("progress", int(value))
+
+    def _search_completed_for(self, search_id):
+        self.search_state.finish(search_id)
+
+    def search_brands(self, article):
+        """Шаг 1: какие бренды знают поставщики для артикула. Возвращает варианты с голосами:
+        [{{label, brand, votes, providers, choice}}], где votes — сколько поставщиков назвали бренд."""
+        raw = str(article or "").strip()
+        clean = self.clean_num(raw)
+        search_id, _ = self.search_state.start("brands:" + clean + ":" + str(time.monotonic()))
+        resolved = self._resolve_brand_choices(search_id, raw, clean)
+        self.search_state.finish(search_id)
+        choices, stats = resolved or ([], {{}})
+        answered = sorted(name for name, count in (stats or {{}}).items() if count)
+        out = []
+        for choice in choices:
+            providers = sorted({{c.provider for c in choice.candidates if c.provider}})
+            names = sorted({{c.name for c in choice.candidates if c.name}}, key=len)
+            out.append({{"label": choice.label, "brand": choice.canonical_brand, "votes": len(providers),
+                        "providers": providers, "name": names[0] if names else "", "choice": choice}})
+        out.sort(key=lambda row: -row["votes"])  # устойчиво: при равенстве — порядок десктопа
+        return out, answered
+
+    def search_offers(self, article, choice=None):
+        """Шаг 2: поиск у всех поставщиков по артикулу и выбранному бренду (BrandChoice или None),
+        затем кроссы по локальным прайсам. Возвращает итоговую выдачу (как таблица десктопа)."""
+        raw = str(article or "").strip()
+        clean = self.clean_num(raw)
+        brand = ""
+        self._selected_brand_variants = {{}}
+        if choice is not None:
+            brand = choice.canonical_brand
+            self._selected_brand_variants = dict(choice.provider_brands)
+            for provider_name, provider_brand in self._selected_brand_variants.items():
+                self.brand_aliases.remember_provider_name(brand, provider_name, provider_brand)
+        self._last_search_results = []
+        search_id, _ = self.search_state.start("offers:" + clean + ":" + str(time.monotonic()))
+        # Невозвратные не прячем: в вебе у них признак, а скрыть их — переключатель в выдаче
+        # (по умолчанию — как настройка hide_no_return).
+        hide, self.hide_no_return = self.hide_no_return, False
+        try:
+            self.run_query(search_id, raw, clean, brand)
+        finally:
+            self.hide_no_return = hide
+        return list(self._last_search_results)
 
     def _log(self, text):
         if self._log_callback:

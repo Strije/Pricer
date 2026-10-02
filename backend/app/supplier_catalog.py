@@ -87,7 +87,9 @@ COMMON_FIELDS = [("enabled", "Включён", "bool"), ("timeout", "Тайма�
 
 # Настройки организации (не относятся к конкретному поставщику).
 ORG_KEYS = ("default_markup", "markup_rules", "rounding_mode", "rounding_from", "rounding_to",
-            "hide_no_return", "max_crosses", "provider_cache", "default_comment")
+            "hide_no_return", "max_crosses", "provider_cache", "default_comment",
+            # порог автовыбора бренда по голосам поставщиков (app/search.py)
+            "brand_auto_share", "brand_auto_lead")
 
 # Запасной признак секрета для полей, которых нет в справочнике (на случай новых версий десктопа).
 _SECRET_NAME = re.compile(r"(?i)(key|pass|login|user|token|secret|phone|client_id|contact_name)")

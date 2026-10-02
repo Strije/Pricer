@@ -39,6 +39,7 @@ from app import clients as client_service  # noqa: E402
 from app import db  # noqa: E402
 from app import orders as order_service  # noqa: E402
 from app import supplier_catalog as catalog  # noqa: E402
+from app import search as search_service  # noqa: E402
 from app import supplier_lines as lines_service  # noqa: E402
 from app.redact import Redactor  # noqa: E402
 from app.security import (  # noqa: E402
@@ -59,6 +60,7 @@ SETTINGS_UPLOAD_LIMIT = 2 * 1024 * 1024
 ORDER_FILE_LIMIT = 5 * 1024 * 1024
 ORDER_FILE_ROWS = 1000
 FILE_ALTERNATIVES = 30
+FIND_LIMIT = 1500  # предложений в выдаче поиска (у ходовых номеров с аналогами бывает больше тысячи)
 
 
 # ---------- схемы запросов ----------
@@ -118,6 +120,12 @@ class CreateOrderRequest(BaseModel):
     phone: str = Field(default="", max_length=30)
     client_id: int | None = None
     vehicle_id: int | None = None
+
+
+class FindRequest(BaseModel):
+    """Поиск «Проценки»: только артикул; бренд — подпись варианта из шага выбора (если уточняли)."""
+    article: str = Field(min_length=1, max_length=80)
+    brand: str = Field(default="", max_length=120)
 
 
 class CartAddRequest(BaseModel):
@@ -634,6 +642,74 @@ def create_app(var_dir=None, database_url=None):
         for old in sorted(state["jobs"].values(), key=lambda j: j.created)[:-200]:
             state["jobs"].pop(old.id, None)
         threading.Thread(target=run, args=(job,), daemon=True).start()
+        return {"job_id": job.id, "providers": engine.provider_names}
+
+    # ----- поиск «Проценки»: бренд голосованием, все поставщики, кроссы, ★ -----
+
+    def run_find(job, customer):
+        engine = engine_for(job.organization_id)
+        req = job.request
+        with engine.lock:
+            last_push = [0.0]
+
+            def on_event(kind, data):
+                if kind == "provider":
+                    job.push("provider", engine.redactor.messages(data))
+                elif kind == "progress":
+                    job.push("progress", {"percent": data})
+                elif kind == "results" and time.monotonic() - last_push[0] > 0.7:
+                    # промежуточная выдача — не чаще раза в 0,7 с; после завершения убирается из job
+                    last_push[0] = time.monotonic()
+                    rows = [search_service.offer_view(i, engine, customer) for i in data[:FIND_LIMIT]]
+                    drop_partials()
+                    job.push("partial", engine.redactor.messages({"offers": rows, "total": len(data)}))
+
+            def drop_partials():
+                # Прежние промежуточные выдачи больше не нужны: заменяем их пустышкой на месте, чтобы
+                # не держать в памяти и не сдвинуть номера событий у уже открытых потоков.
+                for event in job.events:
+                    if event["event"] == "partial" and not event["data"].get("stale"):
+                        event["data"] = {"stale": True}
+
+            try:
+                replay_reset(engine)
+                with Session() as session:
+                    share, lead = search_service.brand_settings(session.get(db.Organization, job.organization_id).settings)
+                choices, answered = engine.search_brands(req.article)
+                picked = next((c for c in choices if c["label"] == req.brand), None) if req.brand else \
+                    search_service.choose_brand(choices, answered, share, lead)
+                job.push("brands", {"choices": [search_service.brand_view(c) for c in choices],
+                                    "answered": len(answered), "selected": picked["label"] if picked else "",
+                                    "auto": bool(picked and not req.brand)})
+                if choices and picked is None:
+                    job.push("need_brand", {"article": req.article})
+                    return
+                engine.on_search_event = on_event
+                results = engine.search_offers(req.article, picked["choice"] if picked else None)
+                job.results = [{"alternatives": results}]  # для «В корзину»: предложение берём отсюда
+                rows = [search_service.offer_view(i, engine, customer) for i in results[:FIND_LIMIT]]
+                drop_partials()
+                job.push("done", engine.redactor.messages({
+                    "article": req.article, "brand": picked["brand"] if picked else "",
+                    "offers": rows, "total": len(results), "highlights": search_service.highlights(rows),
+                    "hide_no_return": bool(engine.hide_no_return)}))
+            except Exception as exc:  # ошибка показывается пользователю, сервис продолжает работать
+                job.push("error", {"message": engine.redactor.text(f"{type(exc).__name__}: {exc}")[:300]})
+            finally:
+                engine.on_search_event = None
+                engine.on_provider_progress = None
+                job.done = True
+
+    @app.post("/api/find")
+    def start_find(request: FindRequest, user=Depends(current_user)):
+        engine = engine_for(user["organization_id"])
+        if not engine.providers:
+            raise HTTPException(status_code=400, detail="у организации не подключено ни одного поставщика")
+        job = Job(request, user["organization_id"])
+        state["jobs"][job.id] = job
+        for old in sorted(state["jobs"].values(), key=lambda j: j.created)[:-200]:
+            state["jobs"].pop(old.id, None)
+        threading.Thread(target=run_find, args=(job, user["role"] == "customer"), daemon=True).start()
         return {"job_id": job.id, "providers": engine.provider_names}
 
     # ----- заказ из файла -----

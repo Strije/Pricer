@@ -12,6 +12,7 @@
 import datetime
 import math
 import re
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -21,11 +22,14 @@ from abstd import AbstdProvider
 from armtek import ArmtekProvider
 from avtoto import AvtotoProvider
 from brand_aliases import BrandAliasResolver
+from brand_resolver import BrandResolver
 from bulk_order import filter_exact_offers, rank_offers, status_for_selection
+from cross_targets import UNKNOWN_DELIVERY_HOURS, build_cross_targets
 from favorit import FavoritProvider
 from forum_auto import ForumAutoProvider
 from mikado import MikadoProvider
-from offer_normalizer import is_requested_part, normalize_offer
+from offer_normalizer import (deduplicate_offers, is_requested_part, mark_best_offers, normalize_offer,
+                              offer_sort_key, offer_unique_key)
 from order_quantity import quantity_from_item
 from order_store import OrderStore
 from pr_lg import PrLgProvider
@@ -33,8 +37,9 @@ from pricing import DEFAULT_MARKUP_RULES, calculate_sale_price
 from provider_adapter import ProviderAdapter
 from provider_health import ProviderCircuitBreaker
 from provider_result_cache import ProviderResultCache
-from result_limiter import DEFAULT_PROVIDER_LIMITS, normalize_provider_limits
+from result_limiter import DEFAULT_PROVIDER_LIMITS, limit_provider_results, normalize_provider_limits
 from rossko import RosskoProvider
+from search_state import SearchState
 from tiss_tmparts import TissTmpartsProvider
 from tradesoft import TradesoftProvider
 from url_csv_provider import UrlCsvProvider
@@ -140,6 +145,7 @@ class ProcurementEngine:
                  log=None, providers=None, order_store=None, order_history=None):
         self.settings = dict(settings or default_settings())
         self.brand_aliases = brand_aliases or BrandAliasResolver()
+        self.brand_resolver = BrandResolver(self.brand_aliases)
         self.cross_store = cross_store
         self.detailed_logger = detailed_logger
         self._log_callback = log
@@ -147,6 +153,9 @@ class ProcurementEngine:
         self.provider_circuit = ProviderCircuitBreaker(threshold=5, cooldown_seconds=45)
         self._order_file_search_id = 0
         self._selected_brand_variants = {}
+        self.search_state = SearchState()
+        self.on_search_event = None  # (вид, данные): results / provider / progress — для SSE
+        self._search_lock = threading.Lock()
         self.on_provider_progress = None
         self.on_order_action = None
         self.order_store = order_store
@@ -154,6 +163,70 @@ class ProcurementEngine:
         self.configure(self.settings)
         if providers is not None:
             self.providers = list(providers)
+
+    # ----- интерактивный поиск (вкладка «Поиск») -----
+
+    def _emit_search(self, kind, data):
+        if self.on_search_event:
+            try:
+                self.on_search_event(kind, data)
+            except Exception:
+                pass  # сбой показа не должен ломать поиск
+
+    def _search_results_ready(self, search_id, results):
+        self._last_search_results = list(results or [])
+        self._emit_search("results", self._last_search_results)
+
+    def _search_provider_status(self, search_id, name, status):
+        self._emit_search("provider", {"provider": name, "status": status})
+
+    def _search_progress(self, search_id, value):
+        self._emit_search("progress", int(value))
+
+    def _search_completed_for(self, search_id):
+        self.search_state.finish(search_id)
+
+    def search_brands(self, article):
+        """Шаг 1: какие бренды знают поставщики для артикула. Возвращает варианты с голосами:
+        [{label, brand, votes, providers, choice}], где votes — сколько поставщиков назвали бренд."""
+        raw = str(article or "").strip()
+        clean = self.clean_num(raw)
+        search_id, _ = self.search_state.start("brands:" + clean + ":" + str(time.monotonic()))
+        resolved = self._resolve_brand_choices(search_id, raw, clean)
+        self.search_state.finish(search_id)
+        choices, stats = resolved or ([], {})
+        answered = sorted(name for name, count in (stats or {}).items() if count)
+        out = []
+        for choice in choices:
+            providers = sorted({c.provider for c in choice.candidates if c.provider})
+            names = sorted({c.name for c in choice.candidates if c.name}, key=len)
+            out.append({"label": choice.label, "brand": choice.canonical_brand, "votes": len(providers),
+                        "providers": providers, "name": names[0] if names else "", "choice": choice})
+        out.sort(key=lambda row: -row["votes"])  # устойчиво: при равенстве — порядок десктопа
+        return out, answered
+
+    def search_offers(self, article, choice=None):
+        """Шаг 2: поиск у всех поставщиков по артикулу и выбранному бренду (BrandChoice или None),
+        затем кроссы по локальным прайсам. Возвращает итоговую выдачу (как таблица десктопа)."""
+        raw = str(article or "").strip()
+        clean = self.clean_num(raw)
+        brand = ""
+        self._selected_brand_variants = {}
+        if choice is not None:
+            brand = choice.canonical_brand
+            self._selected_brand_variants = dict(choice.provider_brands)
+            for provider_name, provider_brand in self._selected_brand_variants.items():
+                self.brand_aliases.remember_provider_name(brand, provider_name, provider_brand)
+        self._last_search_results = []
+        search_id, _ = self.search_state.start("offers:" + clean + ":" + str(time.monotonic()))
+        # Невозвратные не прячем: в вебе у них признак, а скрыть их — переключатель в выдаче
+        # (по умолчанию — как настройка hide_no_return).
+        hide, self.hide_no_return = self.hide_no_return, False
+        try:
+            self.run_query(search_id, raw, clean, brand)
+        finally:
+            self.hide_no_return = hide
+        return list(self._last_search_results)
 
     def _log(self, text):
         if self._log_callback:
@@ -2612,6 +2685,31 @@ class ProcurementEngine:
                 result[key] = f"list[{len(value)}]"
         return result
 
+    def _brand_candidate_log_sample(self, candidates, limit=8):
+        sample = []
+        for item in list(candidates or [])[:max(0, int(limit or 0))]:
+            if isinstance(item, dict):
+                sample.append(
+                    {
+                        "brand": item.get("brand"),
+                        "article": item.get("article"),
+                        "name": item.get("name"),
+                        "source": item.get("source"),
+                        "is_cross": bool(item.get("is_cross")),
+                    }
+                )
+            else:
+                sample.append(
+                    {
+                        "brand": getattr(item, "brand", ""),
+                        "article": getattr(item, "article", ""),
+                        "name": getattr(item, "name", ""),
+                        "source": getattr(item, "source", ""),
+                        "is_cross": bool(getattr(item, "is_cross", False)),
+                    }
+                )
+        return sample
+
     def clean_num(self, text):
         if not text: return ""
         return re.sub(r'[^A-Z0-9]', '', str(text).upper())
@@ -2851,6 +2949,9 @@ class ProcurementEngine:
             item["display_brand"] = display_brand
         return item
 
+    def has_available_quantity(self, item):
+        return quantity_from_item(item, 1).can_order
+
     def _quantity_info(self, item, requested_quantity=1):
         return quantity_from_item(item, requested_quantity)
 
@@ -2859,11 +2960,177 @@ class ProcurementEngine:
             return 0
         return info.available_int()
 
+    def _resolve_brand_choices(self, search_id, raw_article, clean_article):
+        if not self.search_state.is_current(search_id):
+            return
+        brand_sources = list(self.providers) + list(getattr(self, "reference_sources", []))
+        resolvers = [
+            provider for provider in brand_sources
+            if self.brand_resolver.supports(provider)
+        ]
+        candidates = []
+        stats = {}
+
+        def resolve(provider):
+            cls_name = provider.__class__.__name__
+            display_name = self._provider_display_name(cls_name)
+            cache_key = self._provider_cache_key(
+                "brands",
+                cls_name,
+                raw_article,
+                clean_article,
+                "",
+            )
+            cache_hit, cached_result, cache_age = self._provider_cache_get(cache_key)
+            if cache_hit:
+                return cls_name, display_name, cached_result or [], True, cache_age
+            try:
+                found = self.brand_resolver.collect_from_provider(
+                    provider,
+                    display_name,
+                    raw_article,
+                )
+                if not found and raw_article != clean_article:
+                    found = self.brand_resolver.collect_from_provider(
+                        provider,
+                        display_name,
+                        clean_article,
+                    )
+                if found:
+                    self._provider_cache_set(cache_key, found)
+                return cls_name, display_name, found, False, 0
+            except Exception as exc:
+                self._log(
+                    f"{display_name}: не удалось определить бренды ({exc})"
+                )
+                self._detail_log(
+                    "brand_resolver_error",
+                    provider=display_name,
+                    search_id=search_id,
+                    article=raw_article,
+                    error_type=exc.__class__.__name__,
+                    error=str(exc),
+                )
+                return cls_name, display_name, [], False, 0
+
+        if resolvers:
+            executor = ThreadPoolExecutor(max_workers=len(resolvers))
+            futures = {
+                executor.submit(resolve, provider): provider
+                for provider in resolvers
+            }
+            pending = set(futures)
+            deadlines = {
+                future: time.monotonic() + min(
+                    self._provider_timeout(provider),
+                    self._brand_resolver_timeout(provider),
+                )
+                for future, provider in futures.items()
+            }
+            try:
+                while pending:
+                    now = time.monotonic()
+                    timed_out = [future for future in pending if now >= deadlines[future]]
+                    for future in timed_out:
+                        pending.remove(future)
+                        future.cancel()
+                        cls_name = futures[future].__class__.__name__
+                        display_name = self._provider_display_name(cls_name)
+                        stats[display_name] = 0
+                        self._detail_log(
+                            "brand_resolver_timeout",
+                            provider=display_name,
+                            search_id=search_id,
+                            article=raw_article,
+                            timeout_seconds=self._brand_resolver_timeout(futures[future]),
+                        )
+                        if display_name == "Avtoto":
+                            seconds = self._format_seconds(self._brand_resolver_timeout(futures[future]))
+                            self._log(
+                                f"Avtoto: не успел определить бренды за {seconds}с"
+                            )
+
+                    if not pending:
+                        break
+                    wait_for = max(0.0, min(deadlines[future] for future in pending) - time.monotonic())
+                    done, _ = wait(pending, timeout=wait_for, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        pending.remove(future)
+                        _, display_name, found, cache_hit, cache_age = future.result()
+                        found = found or []
+                        stats[display_name] = len(found)
+                        candidates.extend(found)
+                        self._detail_log(
+                            "brand_resolver_finish",
+                            provider=display_name,
+                            search_id=search_id,
+                            article=raw_article,
+                            cache_hit=bool(cache_hit),
+                            cache_age_seconds=round(cache_age, 3) if cache_hit else 0,
+                            count=len(found),
+                            samples=self._brand_candidate_log_sample(found),
+                        )
+                        if display_name == "Avtoto" and not found:
+                            provider = futures[future]
+                            msg = getattr(provider, "last_message", "")
+                            suffix = f" ({msg})" if msg else ""
+                            self._log(
+                                f"Avtoto: бренды не найдены{suffix}"
+                            )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+
+        if not self.search_state.is_current(search_id):
+            return
+        self._brand_choice_variants = {}
+        self._brand_choice_canonical = {}
+        self._brand_choice_candidates = {}
+        choices = self.brand_resolver.build_choices(candidates, raw_article)
+        labels = [choice.label for choice in choices]
+        for choice in choices:
+            self._brand_choice_variants[choice.label] = dict(choice.provider_brands)
+            self._brand_choice_canonical[choice.label] = choice.canonical_brand
+            self._brand_choice_candidates[choice.label] = choice.candidates
+
+        if stats:
+            found_count = sum(1 for count in stats.values() if count)
+            if found_count:
+                self._log(
+                    "Уточнение бренда: "
+                    + ", ".join(f"{name} {count}" for name, count in stats.items() if count)
+                )
+            self._detail_log(
+                "brand_resolver_summary",
+                search_id=search_id,
+                article=raw_article,
+                stats=stats,
+                choice_count=len(labels),
+                choices=labels[:20],
+            )
+        return choices, stats
+
     def _provider_timeout(self, provider, default=12):
         try:
             return max(1.0, float(getattr(provider, "timeout", default) or default))
         except (TypeError, ValueError):
             return float(default)
+
+    def _brand_resolver_timeout(self, provider):
+        try:
+            return max(1.0, float(getattr(provider, "brand_resolver_timeout", 3) or 3))
+        except (TypeError, ValueError):
+            return 3.0
+
+    def _limit_provider_results(self, display_name, rows, clean_article, selected_brand):
+        return limit_provider_results(
+            rows,
+            clean_article,
+            selected_brand,
+            same_brand=self.same_brand_group,
+            brand_key=self.brand_group_key,
+            clean_num=self.clean_num,
+            config=getattr(self, "provider_result_limits", {}).get(display_name, DEFAULT_PROVIDER_LIMITS),
+        )
 
     def _provider_cache_key(self, kind, cls_name, raw_article, clean_article, brand="", variant=""):
         return (
@@ -3016,6 +3283,758 @@ class ProcurementEngine:
                     result_count=len(res),
                 )
         return res, elapsed, False
+
+    def run_query(self, search_id, raw_article, clean_article, selected_brand=""):
+        all_results = []
+        total = len(self.providers)
+        try:
+            if not self.search_state.is_current(search_id):
+                return
+            if not self.providers:
+                self._detail_log(
+                    "search_end",
+                    message="нет подключённых поставщиков",
+                    search_id=search_id,
+                    article=raw_article,
+                    clean_article=clean_article,
+                    selected_brand=selected_brand,
+                    status="no_providers",
+                )
+                self._search_completed_for(search_id)
+                return
+            provider_names = [
+                self._provider_display_name(provider.__class__.__name__)
+                for provider in self.providers
+            ]
+            self._detail_log(
+                "search_start",
+                search_id=search_id,
+                article=raw_article,
+                clean_article=clean_article,
+                selected_brand=selected_brand,
+                provider_count=total,
+                providers=provider_names,
+            )
+
+            executor = ThreadPoolExecutor(max_workers=max(1, total))
+            futures = {}
+            started_at = time.monotonic()
+            completed = 0
+            try:
+                for provider in self.providers:
+                    cls_name = provider.__class__.__name__
+                    display_name = self._provider_display_name(cls_name)
+                    allowed, remaining = self.provider_circuit.allow(display_name)
+                    if not allowed:
+                        self._log(
+                            f"{display_name}: временно пропущен после повторных ошибок, "
+                            f"повтор через {self._format_seconds(remaining)}"
+                        )
+                        self._detail_log(
+                            "provider_skipped",
+                            provider=display_name,
+                            search_id=search_id,
+                            reason="circuit_open",
+                            retry_after_seconds=remaining,
+                        )
+                        self._search_provider_status(search_id, display_name, "error")
+                        completed += 1
+                        self._search_progress(search_id, int(completed / total * 100))
+                        self._search_results_ready(search_id, self.compact_results(all_results))
+                        continue
+                    self._log(f"Запрос {display_name}...")
+                    self._detail_log(
+                        "provider_start",
+                        provider=display_name,
+                        search_id=search_id,
+                        provider_class=cls_name,
+                        article=raw_article,
+                        clean_article=clean_article,
+                        selected_brand=selected_brand,
+                        timeout_seconds=self._provider_timeout(provider),
+                    )
+                    self._search_provider_status(search_id, display_name, "searching")
+                    future = executor.submit(
+                        self._query_provider,
+                        provider,
+                        cls_name,
+                        raw_article,
+                        clean_article,
+                        selected_brand,
+                    )
+                    futures[future] = (provider, cls_name, display_name)
+
+                pending = set(futures)
+                expired = set()
+                deadlines = {
+                    future: started_at + self._provider_timeout(provider)
+                    for future, (provider, _, _) in futures.items()
+                }
+
+                def emit_provider_debug(provider, display_name):
+                    if display_name != "Forum-Auto":
+                        return
+                    debug_summary = getattr(provider, "debug_summary", None)
+                    if not callable(debug_summary):
+                        return
+                    for line in debug_summary().splitlines():
+                        if line:
+                            self._log(line)
+                            self._detail_log(
+                                "provider_debug",
+                                provider=display_name,
+                                search_id=search_id,
+                                message=line,
+                            )
+
+                def finish_future(future):
+                    nonlocal completed
+                    if not self.search_state.is_current(search_id):
+                        return
+                    provider, cls_name, display_name = futures[future]
+                    try:
+                        res, elapsed, cache_hit = future.result()
+                        if res:
+                            self.provider_circuit.record_success(display_name)
+                            raw_result_count = len(res)
+                            shown_before = len(all_results)
+                            skipped_qty = 0
+                            skipped_warehouse = 0
+                            skipped_no_return = 0
+                            shown_samples = []
+                            candidates = []
+                            for item in res:
+                                if "article" not in item or not item["article"]:
+                                    item["article"] = raw_article
+                                item.setdefault("source_code", raw_article)
+                                if selected_brand:
+                                    item.setdefault("source_brand", selected_brand)
+                                self.normalize_item_article(item)
+                                self._apply_offer_relation(
+                                    item, clean_article, selected_brand, raw_article, display_name
+                                )
+                                self.normalize_offer_item(item, 1)
+                                if not self.has_available_quantity(item):
+                                    skipped_qty += 1
+                                    continue
+                                allowed, reason = self._filter_provider_item(display_name, item)
+                                if not allowed:
+                                    if reason == "без возврата":
+                                        skipped_no_return += 1
+                                    else:
+                                        skipped_warehouse += 1
+                                    continue
+                                self._apply_warehouse_extra_days(display_name, item)
+                                candidates.append(item)
+
+                            limited_res, limit_stats = self._limit_provider_results(
+                                display_name,
+                                candidates,
+                                clean_article,
+                                selected_brand,
+                            )
+                            for item in limited_res:
+                                all_results.append(item)
+                                if len(shown_samples) < 8:
+                                    shown_samples.append(dict(item))
+                            shown_count = len(all_results) - shown_before
+                            suffix = f", показано {shown_count}"
+                            if len(candidates) != raw_result_count:
+                                suffix += f", после фильтров {len(candidates)}"
+                            if limit_stats.get("dropped_count"):
+                                suffix += f", ограничено {len(candidates)}->{len(limited_res)}"
+                            if skipped_qty:
+                                suffix += f", скрыто без остатка {skipped_qty}"
+                            if skipped_warehouse:
+                                suffix += f", скрыто по складам {skipped_warehouse}"
+                            if skipped_no_return:
+                                suffix += f", скрыто без возврата {skipped_no_return}"
+                            source_suffix = " из кэша" if cache_hit else ""
+                            self._log(
+                                f"{display_name}: найдено {raw_result_count} позиций{source_suffix} "
+                                f"за {elapsed:.1f}с{suffix}"
+                            )
+                            self._detail_log(
+                                "provider_finish",
+                                provider=display_name,
+                                search_id=search_id,
+                                status="ok",
+                                cache_hit=bool(cache_hit),
+                                elapsed_seconds=round(elapsed, 3),
+                                result_count=raw_result_count,
+                                filtered_count=len(candidates),
+                                limited_count=len(limited_res),
+                                limit_stats=limit_stats,
+                                shown_count=shown_count,
+                                skipped_without_stock=skipped_qty,
+                                skipped_by_warehouse=skipped_warehouse,
+                                skipped_no_return=skipped_no_return,
+                                samples=self._offer_log_sample(shown_samples),
+                                last_message=getattr(provider, "last_message", ""),
+                            )
+                            self._search_provider_status(search_id, display_name, "done")
+                            emit_provider_debug(provider, display_name)
+                        else:
+                            msg = getattr(provider, "last_message", "")
+                            if msg and "обработке" in msg.lower():
+                                self._log(f"{display_name}: поиск в обработке за {elapsed:.1f}с ({msg})")
+                                self._detail_log(
+                                    "provider_finish",
+                                    provider=display_name,
+                                    search_id=search_id,
+                                    status="pending",
+                                    elapsed_seconds=round(elapsed, 3),
+                                    result_count=0,
+                                    last_message=msg,
+                                )
+                                self._search_provider_status(search_id, display_name, "searching")
+                            elif msg:
+                                self._log(f"{display_name}: без результатов за {elapsed:.1f}с ({msg})")
+                                self._search_provider_status(search_id, display_name, "error")
+                                status = "error" if ProviderCircuitBreaker.should_count_failure(msg) else "no_results"
+                                self._detail_log(
+                                    "provider_finish",
+                                    provider=display_name,
+                                    search_id=search_id,
+                                    status=status,
+                                    elapsed_seconds=round(elapsed, 3),
+                                    result_count=0,
+                                    last_message=msg,
+                                )
+                                if ProviderCircuitBreaker.should_count_failure(msg):
+                                    remaining = self.provider_circuit.record_failure(display_name, msg)
+                                    if remaining:
+                                        self._log(
+                                            f"{display_name}: временно отключён на "
+                                            f"{self._format_seconds(remaining)} после повторных технических ошибок"
+                                        )
+                                else:
+                                    self.provider_circuit.record_success(display_name)
+                                if display_name == "Avtoto":
+                                    self.add_log(f"Avtoto: {msg}")
+                                emit_provider_debug(provider, display_name)
+                            else:
+                                self.provider_circuit.record_success(display_name)
+                                self._log(f"{display_name}: без результатов за {elapsed:.1f}с")
+                                self._detail_log(
+                                    "provider_finish",
+                                    provider=display_name,
+                                    search_id=search_id,
+                                    status="no_results",
+                                    elapsed_seconds=round(elapsed, 3),
+                                    result_count=0,
+                                )
+                                self._search_provider_status(search_id, display_name, "done")
+                                emit_provider_debug(provider, display_name)
+                    except Exception as e:
+                        self._log(f"ОШИБКА {display_name}: {str(e)}")
+                        self.add_log(f"Провайдер {display_name} вернул ошибку: {str(e)}")
+                        self._detail_log(
+                            "provider_error",
+                            provider=display_name,
+                            search_id=search_id,
+                            error_type=e.__class__.__name__,
+                            error=str(e),
+                        )
+                        remaining = self.provider_circuit.record_failure(display_name, str(e))
+                        if remaining:
+                            self._log(
+                                f"{display_name}: временно отключён на "
+                                f"{self._format_seconds(remaining)} после повторных технических ошибок"
+                            )
+                        emit_provider_debug(provider, display_name)
+                        self._search_provider_status(search_id, display_name, "error")
+                    completed += 1
+                    self._search_progress(search_id, int(completed / total * 100))
+                    self._search_results_ready(search_id, self.compact_results(all_results))
+
+                while pending:
+                    if not self.search_state.is_current(search_id):
+                        break
+                    now = time.monotonic()
+                    timed_out = [future for future in pending if now >= deadlines[future]]
+                    for future in timed_out:
+                        pending.remove(future)
+                        expired.add(future)
+                        future.cancel()
+                        provider, _, display_name = futures[future]
+                        seconds = self._format_seconds(self._provider_timeout(provider))
+                        self._log(f"{display_name}: не ответил за {seconds}с, пропускаю")
+                        self._detail_log(
+                            "provider_timeout",
+                            provider=display_name,
+                            search_id=search_id,
+                            timeout_seconds=self._provider_timeout(provider),
+                        )
+                        remaining = self.provider_circuit.record_failure(display_name, "таймаут")
+                        if remaining:
+                            self._log(
+                                f"{display_name}: временно отключён на "
+                                f"{self._format_seconds(remaining)} после повторных технических ошибок"
+                            )
+                        self._search_provider_status(search_id, display_name, "error")
+                        completed += 1
+                        self._search_progress(search_id, int(completed / total * 100))
+                        self._search_results_ready(search_id, self.compact_results(all_results))
+
+                    if not pending:
+                        break
+
+                    wait_for = max(0.0, min(deadlines[future] for future in pending) - time.monotonic())
+                    done, _ = wait(pending, timeout=wait_for, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        if future in expired:
+                            continue
+                        pending.remove(future)
+                        finish_future(future)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+            if not self.search_state.is_current(search_id):
+                return
+            cross_targets, cross_target_stats = self._collect_cross_targets(
+                all_results,
+                clean_article,
+                selected_brand,
+            )
+            reference_targets = self._collect_reference_cross_targets(
+                raw_article,
+                clean_article,
+                selected_brand,
+            )
+            cross_targets, cross_merge_stats = self._merge_cross_targets(cross_targets, reference_targets)
+            if cross_targets:
+                self._log(f"Проверка {len(cross_targets)} кроссов в локальном CSV-кэше...")
+                self._detail_log(
+                    "cross_search_start",
+                    search_id=search_id,
+                    cross_count=len(cross_targets),
+                    article=raw_article,
+                    selected_brand=selected_brand,
+                    target_stats=cross_target_stats,
+                    merge_stats=cross_merge_stats,
+                    top_targets=self._cross_target_log_sample(cross_targets, 20),
+                )
+                self._search_crosses(search_id, cross_targets, raw_article, selected_brand, all_results)
+            self._record_cross_pairs(selected_brand, raw_article, all_results)
+            self._detail_log(
+                "search_end",
+                search_id=search_id,
+                article=raw_article,
+                clean_article=clean_article,
+                selected_brand=selected_brand,
+                status="done",
+                total_results=len(all_results),
+                elapsed_seconds=round(time.monotonic() - started_at, 3),
+            )
+            self._search_completed_for(search_id)
+        except Exception as e:
+            self._log(f"КРИТИЧЕСКАЯ ОШИБКА: {str(e)}")
+            self._detail_log(
+                "search_error",
+                search_id=search_id,
+                article=raw_article,
+                clean_article=clean_article,
+                selected_brand=selected_brand,
+                error_type=e.__class__.__name__,
+                error=str(e),
+            )
+            self._search_results_ready(search_id, [])
+            self._search_completed_for(search_id)
+
+    def _collect_cross_targets(self, results, original_article, selected_brand=""):
+        return build_cross_targets(
+            results,
+            original_article,
+            selected_brand,
+            clean_num=self.clean_num,
+            brand_key=self.brand_group_key,
+            same_brand=self.same_brand_group,
+            max_targets=getattr(self, "max_crosses", 0),
+            top_limit=20,
+        )
+
+    def _collect_reference_cross_targets(self, raw_article, clean_article, selected_brand):
+        self._reference_cross_meta = {}
+        sources = [
+            source for source in getattr(self, "reference_sources", [])
+            if callable(getattr(source, "get_cross_targets", None))
+        ]
+        if not sources:
+            return []
+        if not selected_brand:
+            self._log("ABCP справочник: кроссы пропущены, бренд не выбран")
+            return []
+        targets = []
+        for source in sources:
+            display_name = self._provider_display_name(source.__class__.__name__)
+            started_at = time.monotonic()
+            if hasattr(source, "allow_articles_info") and not getattr(source, "allow_articles_info", False):
+                self._log(
+                    f"{display_name}: articles/info отключён, кроссы/фото ABCP пропущены"
+                )
+                self._detail_log(
+                    "reference_cross_skipped",
+                    provider=display_name,
+                    reason="articles_info_disabled",
+                    article=raw_article,
+                    selected_brand=selected_brand,
+                )
+                continue
+            try:
+                rows = source.get_cross_targets(raw_article, selected_brand) or []
+            except Exception as exc:
+                self._log(f"{display_name}: ошибка кроссов ({str(exc)[:80]})")
+                self._detail_log(
+                    "reference_cross_error",
+                    provider=display_name,
+                    article=raw_article,
+                    selected_brand=selected_brand,
+                    error_type=exc.__class__.__name__,
+                    error=str(exc),
+                )
+                continue
+            added = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                article = str(row.get("article") or row.get("number") or "").strip()
+                brand = str(row.get("brand") or "").strip()
+                target_clean = self.clean_num(article)
+                if not article or not brand or not target_clean:
+                    continue
+                if target_clean == clean_article and self.same_brand_group(brand, selected_brand):
+                    continue
+                meta_key = (target_clean, self.brand_group_key(brand))
+                self._reference_cross_meta.setdefault(meta_key, {}).update(
+                    {
+                        "image_urls": row.get("image_urls") or [],
+                        "cross_relation": row.get("relation") or "",
+                        "cross_type": row.get("cross_type") or "",
+                    }
+                )
+                targets.append({
+                    "article": article,
+                    "clean_article": target_clean,
+                    "brand": brand,
+                    "brand_key": self.brand_group_key(brand),
+                    "cross_source": display_name,
+                    "confirmed_by": [display_name],
+                    "provider_confirm_count": 1,
+                    "raw_offer_count": 1,
+                    "best_price": None,
+                    "best_delivery_hours": UNKNOWN_DELIVERY_HOURS,
+                    "cross_relation": row.get("relation") or row.get("cross_type") or "",
+                })
+                added += 1
+            elapsed = time.monotonic() - started_at
+            if rows:
+                self._log(
+                    f"{display_name}: найдено кроссов {len(rows)} за {elapsed:.1f}с, "
+                    f"в локальный поиск добавлено {added}"
+                )
+                self._detail_log(
+                    "reference_cross_finish",
+                    provider=display_name,
+                    article=raw_article,
+                    selected_brand=selected_brand,
+                    status="ok",
+                    elapsed_seconds=round(elapsed, 3),
+                    result_count=len(rows),
+                    added_count=added,
+                )
+            else:
+                msg = getattr(source, "last_message", "")
+                suffix = f" ({msg})" if msg else ""
+                self._log(f"{display_name}: кроссы не найдены за {elapsed:.1f}с{suffix}")
+                self._detail_log(
+                    "reference_cross_finish",
+                    provider=display_name,
+                    article=raw_article,
+                    selected_brand=selected_brand,
+                    status="no_results",
+                    elapsed_seconds=round(elapsed, 3),
+                    result_count=0,
+                    last_message=msg,
+                )
+        return targets
+
+    def _merge_cross_targets(self, *target_lists):
+        merged = []
+        by_key = {}
+        raw_count = 0
+        duplicate_count = 0
+        limit = max(0, int(getattr(self, "max_crosses", 0) or 0))
+        for targets in target_lists:
+            for target in targets or []:
+                raw_count += 1
+                target = self._normalize_cross_target(target)
+                if not target:
+                    continue
+                key = (target["clean_article"], target["brand_key"])
+                existing = by_key.get(key)
+                if existing:
+                    duplicate_count += 1
+                    self._merge_cross_target_into(existing, target)
+                    continue
+                by_key[key] = target
+                merged.append(target)
+
+        merged.sort(key=self._cross_target_sort_key)
+        dropped_by_limit = 0
+        if limit > 0 and len(merged) > limit:
+            dropped_by_limit = len(merged) - limit
+            merged = merged[:limit]
+        return merged, {
+            "raw_targets": raw_count,
+            "unique_targets": len(by_key),
+            "selected_targets": len(merged),
+            "duplicates_merged": duplicate_count,
+            "dropped_by_limit": dropped_by_limit,
+            "limit": limit,
+        }
+
+    def _normalize_cross_target(self, target):
+        if isinstance(target, dict):
+            article = str(target.get("article") or target.get("clean_article") or "").strip()
+            clean_article = self.clean_num(target.get("clean_article") or article)
+            brand = str(target.get("brand") or "").strip()
+            brand_key = str(target.get("brand_key") or self.brand_group_key(brand)).strip()
+            confirmed_by = [
+                str(item).strip()
+                for item in (target.get("confirmed_by") or [])
+                if str(item).strip()
+            ]
+            cross_source = str(target.get("cross_source") or "").strip()
+        else:
+            try:
+                article, clean_article, brand, cross_source = target
+            except (TypeError, ValueError):
+                return None
+            article = str(article or "").strip()
+            clean_article = self.clean_num(clean_article or article)
+            brand = str(brand or "").strip()
+            brand_key = self.brand_group_key(brand)
+            confirmed_by = [str(cross_source or "").strip()] if str(cross_source or "").strip() else []
+        if not clean_article or not brand_key:
+            return None
+        if not cross_source and confirmed_by:
+            cross_source = ", ".join(confirmed_by[:4])
+        return {
+            "article": article or clean_article,
+            "clean_article": clean_article,
+            "brand": brand,
+            "brand_key": brand_key,
+            "cross_source": cross_source,
+            "confirmed_by": confirmed_by,
+            "provider_confirm_count": max(
+                int(target.get("provider_confirm_count", 0) or 0) if isinstance(target, dict) else 0,
+                len(confirmed_by),
+            ),
+            "raw_offer_count": int(target.get("raw_offer_count", 1) or 1) if isinstance(target, dict) else 1,
+            "best_price": target.get("best_price") if isinstance(target, dict) else None,
+            "best_delivery_hours": target.get("best_delivery_hours", UNKNOWN_DELIVERY_HOURS) if isinstance(target, dict) else UNKNOWN_DELIVERY_HOURS,
+            "cross_relation": target.get("cross_relation", "") if isinstance(target, dict) else "",
+        }
+
+    def _merge_cross_target_into(self, existing, incoming):
+        providers = set(existing.get("confirmed_by") or [])
+        providers.update(incoming.get("confirmed_by") or [])
+        existing["confirmed_by"] = sorted(item for item in providers if item)
+        existing["provider_confirm_count"] = max(
+            int(existing.get("provider_confirm_count") or 0),
+            int(incoming.get("provider_confirm_count") or 0),
+            len(existing["confirmed_by"]),
+        )
+        existing["raw_offer_count"] = int(existing.get("raw_offer_count") or 0) + int(incoming.get("raw_offer_count") or 0)
+        incoming_price = incoming.get("best_price")
+        if incoming_price is not None:
+            current_price = existing.get("best_price")
+            existing["best_price"] = incoming_price if current_price is None else min(current_price, incoming_price)
+        existing["best_delivery_hours"] = min(
+            int(existing.get("best_delivery_hours") or UNKNOWN_DELIVERY_HOURS),
+            int(incoming.get("best_delivery_hours") or UNKNOWN_DELIVERY_HOURS),
+        )
+        if not existing.get("cross_relation") and incoming.get("cross_relation"):
+            existing["cross_relation"] = incoming["cross_relation"]
+        if incoming.get("cross_source") and incoming["cross_source"] not in str(existing.get("cross_source") or ""):
+            existing["cross_source"] = ", ".join(
+                item for item in [existing.get("cross_source"), incoming.get("cross_source")] if item
+            )
+
+    def _cross_target_sort_key(self, target):
+        price = target.get("best_price")
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            price = 999999999.0
+        try:
+            delivery = int(target.get("best_delivery_hours") or UNKNOWN_DELIVERY_HOURS)
+        except (TypeError, ValueError):
+            delivery = UNKNOWN_DELIVERY_HOURS
+        return (
+            -int(target.get("provider_confirm_count") or 0),
+            delivery,
+            price,
+            -int(target.get("raw_offer_count") or 0),
+            str(target.get("brand_key") or ""),
+            str(target.get("clean_article") or ""),
+        )
+
+    def _cross_target_log_sample(self, targets, limit=20):
+        sample = []
+        for target in list(targets or [])[:max(0, int(limit or 0))]:
+            delivery = target.get("best_delivery_hours")
+            try:
+                delivery = int(delivery)
+            except (TypeError, ValueError):
+                delivery = None
+            if delivery is not None and delivery >= UNKNOWN_DELIVERY_HOURS:
+                delivery = None
+            sample.append({
+                "brand": target.get("brand"),
+                "article": target.get("article"),
+                "provider_confirm_count": target.get("provider_confirm_count"),
+                "confirmed_by": list(target.get("confirmed_by") or [])[:6],
+                "raw_offer_count": target.get("raw_offer_count"),
+                "best_price": target.get("best_price"),
+                "best_delivery_hours": delivery,
+                "cross_relation": target.get("cross_relation"),
+            })
+        return sample
+
+    def _search_crosses(self, search_id, targets, source_article, source_brand, all_results):
+        # API-поставщики уже вернули свои кроссы на первом запросе. Повторно
+        # опрашиваем только локальный CSV, чтобы не создавать лавину запросов.
+        if not self.search_state.is_current(search_id):
+            return
+        csv_providers = [provider for provider in self.providers if isinstance(provider, UrlCsvProvider)]
+        targets = [
+            target for target in (targets or [])
+            if str(target.get("brand") or "").strip() and str(target.get("clean_article") or "").strip()
+        ]
+        if not targets or not csv_providers:
+            self._log(
+                "Локальный поиск кроссов завершён: нет кроссов с указанным брендом"
+            )
+            self._detail_log(
+                "cross_search_finish",
+                search_id=search_id,
+                status="no_jobs",
+                checked_count=len(targets),
+                added_count=0,
+            )
+            return
+        started_at = time.monotonic()
+        added_count = 0
+        skipped_brand_count = 0
+        matched_targets = set()
+        raw_sql_rows = 0
+        provider_stats = []
+        target_articles = sorted({target["clean_article"] for target in targets})
+        for provider in csv_providers:
+            if not self.search_state.is_current(search_id):
+                break
+            display_name = self._provider_display_name(provider.__class__.__name__)
+            provider_started = time.monotonic()
+            try:
+                if callable(getattr(provider, "get_prices_many", None)):
+                    found_by_article = provider.get_prices_many(target_articles)
+                else:
+                    found_by_article = {
+                        article: provider.get_prices(article)
+                        for article in target_articles
+                    }
+                provider_row_count = sum(
+                    len(found_by_article.get(article, []) or [])
+                    for article in target_articles
+                )
+                raw_sql_rows += provider_row_count
+                provider_stats.append({
+                    "provider": display_name,
+                    "target_count": len(targets),
+                    "article_count": len(target_articles),
+                    "row_count": provider_row_count,
+                    "elapsed_seconds": round(time.monotonic() - provider_started, 3),
+                    "last_message": getattr(provider, "last_message", ""),
+                })
+            except Exception as exc:
+                self._log(f"Ошибка кросс-поиска {display_name}: {exc}")
+                self._detail_log(
+                    "cross_search_error",
+                    provider=display_name,
+                    search_id=search_id,
+                    error_type=exc.__class__.__name__,
+                    error=str(exc),
+                )
+                continue
+
+            for target in targets:
+                target_clean = target["clean_article"]
+                target_brand = target["brand"]
+                for item in found_by_article.get(target_clean, []) or []:
+                    self.normalize_item_article(item)
+                    result_clean = self.clean_num(item.get("article", ""))
+                    if result_clean and result_clean != target_clean:
+                        continue
+                    result_brand = str(item.get("brand", "") or "").strip()
+                    if result_brand and not self.brand_aliases.same(result_brand, target_brand):
+                        skipped_brand_count += 1
+                        continue
+                    item["is_cross"] = True
+                    item["source_brand"] = source_brand
+                    item["source_code"] = source_article
+                    item["cross_source_provider"] = target.get("cross_source") or display_name
+                    item["cross_candidate_confirm_count"] = target.get("provider_confirm_count", 0)
+                    item["cross_candidate_confirmed_by"] = list(target.get("confirmed_by") or [])
+                    item["cross_candidate_best_price"] = target.get("best_price")
+                    item["cross_candidate_best_delivery_hours"] = target.get("best_delivery_hours")
+                    if target.get("cross_relation"):
+                        item.setdefault("cross_relation", target.get("cross_relation"))
+                        item.setdefault("cross_type", target.get("cross_relation"))
+                    meta = getattr(self, "_reference_cross_meta", {}).get(
+                        (target_clean, self.brand_group_key(target_brand)),
+                        {},
+                    )
+                    if meta:
+                        if meta.get("image_urls"):
+                            item["image_urls"] = list(meta.get("image_urls") or [])
+                        if meta.get("cross_relation"):
+                            item["cross_relation"] = meta.get("cross_relation")
+                        if meta.get("cross_type"):
+                            item["cross_type"] = meta.get("cross_type")
+                    self._apply_warehouse_extra_days(display_name, item)
+                    self.normalize_offer_item(item, 1)
+                    if not self.has_available_quantity(item):
+                        continue
+                    all_results.append(item)
+                    added_count += 1
+                    matched_targets.add((target_clean, self.brand_group_key(target_brand)))
+        if not self.search_state.is_current(search_id):
+            return
+        self._search_results_ready(search_id, self.compact_results(all_results))
+        elapsed = time.monotonic() - started_at
+        self._log(
+            f"Локальный поиск кроссов завершён: проверено {len(targets)}, "
+            f"совпало артикулов/брендов {len(matched_targets)}, "
+            f"добавлено предложений {added_count}, "
+            f"отброшено чужих брендов {skipped_brand_count}, время {elapsed:.1f}с"
+        )
+        self._detail_log(
+            "cross_search_finish",
+            search_id=search_id,
+            status="done",
+            checked_count=len(targets),
+            matched_count=len(matched_targets),
+            added_count=added_count,
+            raw_sql_rows=raw_sql_rows,
+            skipped_wrong_brand=skipped_brand_count,
+            provider_stats=provider_stats,
+            top_targets=self._cross_target_log_sample(targets, 20),
+            elapsed_seconds=round(elapsed, 3),
+        )
+
+    def compact_results(self, results):
+        return mark_best_offers(deduplicate_offers(results, self.clean_filter_text))
 
     def _group_id(self, item):
         return (
