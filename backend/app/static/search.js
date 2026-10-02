@@ -65,7 +65,8 @@
       const on = (kind, fn) => es.addEventListener(kind, (ev) => fn(ev.data ? JSON.parse(ev.data) : {}));
       on("provider", (d) => {
         S.states[d.provider] = {...(S.states[d.provider] || {}), status: d.status === "done" ? "ok" : d.status === "searching" ? "wait" : d.status};
-        if (S.states[d.provider].status === "ok") S.states[d.provider].count = S.offers.filter((o) => o.provider === d.provider).length;
+        if (S.states[d.provider].status === "ok") S.states[d.provider].count = d.provider === "Прайс-листы"
+          ? S.offers.filter((o) => !S.providers.includes(o.provider)).length : S.offers.filter((o) => o.provider === d.provider).length;
         renderChips(S.providers, S.states);
       });
       on("brands", renderBrandbar);
@@ -188,7 +189,12 @@
     buildLabels();
     // число предложений у каждого поставщика — на плашках над выдачей
     const perProvider = {};
-    for (const o of S.offers) if (o.provider) perProvider[o.provider] = (perProvider[o.provider] || 0) + 1;
+    // предложения прайсов подписаны своим прайсом («Прайс Армтек Москва») — на плашке они в «Прайс-листы»
+    const known = new Set(S.providers);
+    for (const o of S.offers) if (o.provider) {
+      const chip = known.has(o.provider) ? o.provider : known.has("Прайс-листы") ? "Прайс-листы" : o.provider;
+      perProvider[chip] = (perProvider[chip] || 0) + 1;
+    }
     for (const [name, st] of Object.entries(S.states)) if (st.status === "ok") st.count = perProvider[name] || 0;
     renderChips(S.providers, S.states);
     const visible = S.offers.filter((o) => passes(o));

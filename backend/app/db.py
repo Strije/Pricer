@@ -5,7 +5,7 @@
 import datetime
 import json
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -190,6 +190,36 @@ class Quote(Base):
     viewed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     chosen_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     order_id: Mapped[str] = mapped_column(String(40), default="")
+
+
+class PriceSource(Base):
+    """Прайс-лист поставщика: откуда брать (ссылка, FTP, позже почта), как разбирать, как часто обновлять."""
+    __tablename__ = "price_sources"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    kind: Mapped[str] = mapped_column(String(10), default="url")  # url | ftp | email
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    location_sealed: Mapped[str] = mapped_column(Text, default="")  # адрес с паролем/токеном — зашифрован
+    location_hint: Mapped[str] = mapped_column(String(300), default="")  # что показать: сервер и имя файла
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)  # column_map, has_header, default_days, warehouse, site_search_url, mail
+    schedule_hours: Mapped[int] = mapped_column(Integer, default=24)
+    status: Mapped[dict] = mapped_column(JSON, default=dict)  # {ok, at, rows, skipped, reasons, message, seconds}
+    loaded_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PriceRow(Base):
+    """Строка прайса: предложение в формате поставщика движка (как строки локального CSV десктопа)."""
+    __tablename__ = "price_rows"
+    # поиск по прайсам — всегда «организация + артикул»
+    __table_args__ = (Index("ix_price_rows_org_article", "organization_id", "article_key"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("price_sources.id", ondelete="CASCADE"), index=True)
+    article_key: Mapped[str] = mapped_column(String(80), index=True)
+    brand: Mapped[str] = mapped_column(String(100), default="")
+    item: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Notification(Base):

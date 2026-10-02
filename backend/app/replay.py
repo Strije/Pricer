@@ -141,5 +141,12 @@ def frozen_datetime_module():
 
 def install(monkeypatch, records, reuse=False):
     replayer = Replayer(records, reuse=reuse)
-    monkeypatch.setattr(HTTPAdapter, "send", lambda self, request, *a, **k: replayer.send(self, request, *a, **k))
+    original = HTTPAdapter.send
+
+    def send(self, request, *a, **k):
+        # Свой компьютер (127.0.0.1) — не поставщик: туда запросы идут как есть (тестовые прайсы и т.п.)
+        if (urlsplit(request.url).hostname or "") in ("127.0.0.1", "localhost"):
+            return original(self, request, *a, **k)
+        return replayer.send(self, request, *a, **k)
+    monkeypatch.setattr(HTTPAdapter, "send", send)
     return replayer
