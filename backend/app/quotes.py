@@ -201,6 +201,8 @@ def manager_view(quote):
         "chosen_at": quote.chosen_at.isoformat(timespec="minutes") if quote.chosen_at else None,
         "expired": expired(quote), "order_id": quote.order_id,
         "client_comment": (quote.data or {}).get("client_comment", ""), "contact": (quote.data or {}).get("contact", ""),
+        "payment": {k: ((quote.data or {}).get("payment") or {}).get(k) for k in ("status", "amount", "paid_at")}
+        if (quote.data or {}).get("payment") else None,
         "lines": [{**{k: v for k, v in line.items() if k != "variants"},
                    "variants": [{"key": v["key"], "sale_price": v["sale_price"], "added_at": v.get("added_at"),
                                  **{f: (v.get("offer") or {}).get(f) for f in (

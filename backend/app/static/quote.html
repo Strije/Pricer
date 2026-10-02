@@ -77,7 +77,7 @@
 </main>
 <div class="bar" id="bar" hidden><div class="in">
   <div><div class="muted">Итого по выбранному</div><div class="total" id="total">0 ₽</div></div>
-  <button id="send">Отправить выбор</button>
+  <span><button id="send">Отправить выбор</button> <button id="pay" hidden>Оплатить</button></span>
 </div></div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -99,7 +99,11 @@ function render() {
   $("org").textContent = quote.organization; $("title").textContent = quote.title; document.title = quote.title;
   $("client").textContent = quote.client ? `Для: ${quote.client}` : "";
   const until = quote.expires_at ? new Date(quote.expires_at + "Z").toLocaleString("ru-RU", {day: "numeric", month: "long", hour: "2-digit", minute: "2-digit"}) : "";
-  $("banner").innerHTML = quote.locked ? `<div class="banner ok">Заказ оформлен — спасибо! Менеджер свяжется с вами.</div>`
+  const pay = quote.payment || {};
+  $("banner").innerHTML = pay.status === "succeeded" ? `<div class="banner ok">Оплачено ${money(pay.amount)} ₽ — спасибо! Менеджер свяжется с вами.</div>`
+    : quote.locked ? `<div class="banner ok">Заказ оформлен — спасибо! Менеджер свяжется с вами.</div>`
+    : pay.status === "pending" && new URLSearchParams(location.search).get("paid") ? `<div class="banner warn">Оплата ещё не подтверждена. Если вы оплатили — обновите страницу через минуту.</div>`
+    : pay.status === "canceled" ? `<div class="banner warn">Оплата не прошла. Можно попробовать ещё раз.</div>`
     : quote.status === "chosen" ? `<div class="banner ok">Выбор отправлен менеджеру. Пока заказ не оформлен, выбор можно поменять.</div>`
     : quote.expired ? `<div class="banner warn">Цены были действительны до ${esc(until)}. Выбрать можно — менеджер перепроверит цены и наличие.</div>`
     : until ? `<div class="banner ok">Цены действительны до ${esc(until)}</div>` : "";
@@ -119,7 +123,11 @@ function render() {
   $("comment").value = quote.client_comment || $("comment").value;
   $("print-foot").innerHTML = `Отметьте подходящие варианты. Выбрать онлайн: ${esc(location.origin + location.pathname)}<br>
     Распечатано ${esc(new Date().toLocaleString("ru-RU"))}${until ? " · цены действительны до " + esc(until) : ""}`;
-  $("extra").hidden = $("bar").hidden = quote.locked;
+  $("extra").hidden = quote.locked;
+  $("bar").hidden = quote.locked && !quote.can_pay;
+  $("send").hidden = quote.locked;
+  $("pay").hidden = !quote.can_pay;
+  $("pay").textContent = quote.can_pay ? `Оплатить ${money(quote.total)} ₽` : "Оплатить";
   document.querySelectorAll('#lines input[type=radio]').forEach((r) => r.onchange = updateTotal);
   updateTotal();
 }
@@ -143,6 +151,15 @@ $("send").onclick = async () => {
   $("send").disabled = false;
 };
 $("print").onclick = () => window.print();
+$("pay").onclick = async () => {
+  $("pay").disabled = true; $("msg").className = "msg"; $("msg").textContent = "";
+  try {
+    // сначала сохраняем выбор (если меняли), затем — на страницу ЮKassa: карта, СБП, SberPay
+    if (!quote.locked) quote = await call("POST", `/api/public/quote/${encodeURIComponent(token)}/choose`, {choices: choices(), comment: $("comment").value, contact: $("contact").value});
+    const r = await call("POST", `/api/public/quote/${encodeURIComponent(token)}/pay`);
+    location.href = r.url;
+  } catch (err) { $("msg").textContent = err.message; $("pay").disabled = false; }
+};
 call("GET", `/api/public/quote/${encodeURIComponent(token)}`).then((q) => {
   quote = q; render();
   if (new URLSearchParams(location.search).get("print") === "1") setTimeout(() => window.print(), 300);

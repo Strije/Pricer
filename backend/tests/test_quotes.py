@@ -106,3 +106,71 @@ def test_service_template_quote(app_factory, monkeypatch):  # noqa: F811
     assert any(not v["is_cross"] for v in oil["variants"])  # оригинал среди вариантов
     assert ("item", {"item": "Фильтр масляный", "status": "search", "oem": "162622"}) in events
     assert service_template.oem_numbers(catalog["Фильтр масляный"], "Фильтр масляный") == ["162622"]  # не прокладка
+
+
+class FakeYooKassa:
+    """Подмена requests для ЮKassa: запоминает запросы, платёж «оплачивается» по команде."""
+
+    def __init__(self):
+        self.calls, self.status = [], "pending"
+
+    def request(self, method, url, json=None, auth=None, headers=None, timeout=None):
+        self.calls.append((method, url, json, auth, dict(headers or {})))
+
+        class R:
+            status_code = 200
+
+            def __init__(self, data):
+                self._data = data
+
+            def json(self):
+                return self._data
+        if method == "POST":
+            return R({"id": "pay-1", "status": "pending", "amount": json["amount"],
+                      "confirmation": {"type": "redirect", "confirmation_url": "https://yoomoney.ru/checkout/pay-1"}})
+        return R({"id": "pay-1", "status": self.status, "paid": self.status == "succeeded",
+                  "amount": {"value": "370.00", "currency": "RUB"}, "metadata": {}})
+
+
+def test_quote_payment_yookassa(app_factory, monkeypatch):  # noqa: F811
+    import requests
+
+    from yookassa import receipt
+
+    make_client, client, job, offers = setup(app_factory, "pay@example.com")
+    fake = FakeYooKassa()
+    monkeypatch.setattr(requests, "Session", lambda: fake)
+    quote = client.post("/api/quotes", headers=H, json={"title": "Оплата", "client": "Петров", "phone": "89781234567"}).json()
+    analog = next(o for o in offers if o.get("is_cross"))
+    quote = client.post(f"/api/quotes/{quote['id']}/variants", headers=H, json={"job_id": job, "internal_offer_id": analog["internal_offer_id"]}).json()
+    client.post(f"/api/quotes/{quote['id']}/send", headers=H, json={})
+    public = make_client()
+    token, line = quote["token"], quote["lines"][0]
+    assert public.get(f"/api/public/quote/{token}").json()["can_pay"] is False  # ЮKassa не подключена
+
+    client.post("/api/suppliers", headers=H, json={"section": "yookassa", "config": {"shop_id": "377400", "receipts": True,
+                "tax_system_code": 3, "vat_code": 1}, "secrets": {"secret_key": "live_secret"}})
+    assert public.post(f"/api/public/quote/{token}/pay", headers=H).status_code == 400  # ещё не выбрано
+    view = public.post(f"/api/public/quote/{token}/choose", headers=H, json={"choices": {line["id"]: line["variants"][0]["key"]}}).json()
+    assert view["can_pay"] and view["total"] > 0
+    url = public.post(f"/api/public/quote/{token}/pay", headers=H).json()["url"]
+    assert url == "https://yoomoney.ru/checkout/pay-1"
+    method, api_url, body, auth, headers = fake.calls[-1]
+    assert api_url.endswith("/v3/payments") and auth == ("377400", "live_secret") and headers.get("Idempotence-Key")
+    assert body["amount"]["value"] == f"{view['total']:.2f}" and body["capture"] is True
+    assert body["confirmation"]["return_url"].endswith(f"/q/{token}?paid=1")
+    assert body["receipt"]["customer"] == {"phone": "79781234567"} and body["receipt"]["tax_system_code"] == 3
+    assert body["receipt"]["items"][0]["payment_mode"] == "full_prepayment"
+    assert "live_secret" not in str(public.get(f"/api/public/quote/{token}").json())
+
+    before = client.get("/api/notifications/other").json()["last_id"]
+    fake.status = "succeeded"  # клиент оплатил и вернулся
+    view = public.get(f"/api/public/quote/{token}").json()
+    assert view["payment"]["status"] == "succeeded" and view["locked"] and not view["can_pay"]
+    note = client.get("/api/notifications/other", params={"after": before}).json()["items"]
+    assert note[0]["kind"] == "quote_paid"
+    assert client.get(f"/api/quotes/{quote['id']}").json()["payment"]["status"] == "succeeded"
+    assert public.post(f"/api/public/quote/{token}/choose", headers=H, json={"choices": {line["id"]: "skip"}}).status_code == 400
+    # уведомление ЮKassa без нашего заголовка принимается (статус всё равно перепроверяется запросом)
+    assert public.post("/api/yookassa/webhook", json={"event": "payment.succeeded", "object": {"id": "pay-1", "metadata": {"quote_id": "x"}}}).status_code == 200
+    assert receipt([("Фильтр", 1, 370)], "a@b.ru")["customer"] == {"email": "a@b.ru"}

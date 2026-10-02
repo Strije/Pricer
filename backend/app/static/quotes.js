@@ -77,7 +77,8 @@
         ${q.id === Q.active ? '<span class="note">📋 сюда добавляются варианты из поиска</span>' : '<button class="secondary small" id="qe-activate">Добавлять сюда из поиска</button>'}
       </div>
       <div class="note" style="margin-top:6px">${[q.sent_at && "отправлен " + dt(q.sent_at), q.expires_at && "цены до " + dt(q.expires_at) + (q.expired ? " (истекли)" : ""),
-        q.viewed_at && "открыт " + dt(q.viewed_at), q.chosen_at && "выбран " + dt(q.chosen_at), q.order_id && "заказ " + q.order_id].filter(Boolean).join(" · ")}</div>
+        q.viewed_at && "открыт " + dt(q.viewed_at), q.chosen_at && "выбран " + dt(q.chosen_at), q.order_id && "заказ " + q.order_id].filter(Boolean).join(" · ")}
+        ${q.payment ? ` · ${q.payment.status === "succeeded" ? `<span class="st ok">оплачен ${money(q.payment.amount)} ₽</span>` : q.payment.status === "pending" ? '<span class="st warn">ожидает оплаты</span>' : '<span class="st muted">оплата отменена</span>'}` : ""}</div>
       ${q.client_comment ? `<div class="banner-ok" style="margin-top:8px">Комментарий клиента: ${esc(q.client_comment)}${q.contact ? " · " + esc(q.contact) : ""}</div>` : ""}
       ${q.lines.map((line) => `<div class="q-line" data-line="${line.id}">
           <div class="row"><input data-req value="${esc(line.request)}" style="flex:1 1 220px" title="Как увидит клиент: «Фильтр масляный», «Колодки передние»">
@@ -173,7 +174,10 @@
     if (otherLast === null) { try { const v = localStorage.getItem(key); otherLast = v == null ? -1 : Number(v); } catch (e) { otherLast = -1; } }
     try {
       const r = await api(`/api/notifications/other?after=${otherLast}`);
-      for (const n of r.items) if (n.kind === "quote_chosen") {
+      for (const n of r.items) if (n.kind === "quote_paid") {
+        showToast(`Оплачен подбор: ${n.title}`, `${n.client ? n.client + " · " : ""}${money(n.amount)} ₽`, null,
+          {label: "Открыть подбор", fn: () => { document.querySelector('[data-tab="quotes"]').click(); openQuote(n.quote_id); }});
+      } else if (n.kind === "quote_chosen") {
         showToast(`Клиент выбрал: ${n.title}`, `${n.client ? n.client + " · " : ""}выбрано ${n.chosen} из ${n.positions}${n.comment ? "\n«" + n.comment + "»" : ""}`, null,
           {label: "Открыть подбор", fn: () => { document.querySelector('[data-tab="quotes"]').click(); openQuote(n.quote_id); }});
       }

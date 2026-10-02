@@ -74,6 +74,18 @@ CATALOG = {
         "service": True,  # не поставщик: в поиске цен не участвует
         "fields": [("login", "Логин Laximo", "secret"), ("password", "Пароль Laximo", "secret")],
     },
+    "yookassa": {
+        "title": "Оплата ЮKassa (карта, СБП, SberPay) для подборов",
+        "service": True,
+        "fields": [("shop_id", "Идентификатор магазина (shopId)", "text"), ("secret_key", "Секретный ключ (secretKey)", "secret"),
+                   ("test_mode", "Демо-режим (тестовый магазин)", "bool"), ("test_shop_id", "testShopId", "text"),
+                   ("test_secret_key", "testSecretKey", "secret"),
+                   ("receipts", "Отправлять данные для чеков (54-ФЗ)", "bool"),
+                   ("tax_system_code", "Система налогообложения: 1 ОСН, 2 УСН доходы, 3 УСН доходы минус расходы, 6 патент", "int"),
+                   ("vat_code", "Код НДС ЮKassa (1 — без НДС; код для 22% — по документации ЮKassa)", "int"),
+                   ("payment_subject", "Признак предмета расчёта (commodity — товар)", "text"),
+                   ("payment_mode", "Признак способа расчёта (full_prepayment — полная предоплата)", "text")],
+    },
     "url_csv": {
         "title": "Прайс-листы по ссылкам",
         # Адреса прайсов часто содержат логин и пароль FTP или токен, поэтому они секретные.
