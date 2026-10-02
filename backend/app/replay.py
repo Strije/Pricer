@@ -50,9 +50,12 @@ def _key(method, url, body):
     return method.upper(), parts.netloc.lower(), parts.path, query, (body or "").strip()
 
 
-def _route(method, url):
+def _route(method, url, body=""):
+    """Запасное совпадение: тот же адрес и, если есть, то же действие (у Авто-то один адрес на всё:
+    action=GetShippingList не должен получить записанный ответ поиска)."""
     parts = urlsplit(url)
-    return method.upper(), parts.netloc.lower(), parts.path
+    action = dict(parse_qsl(body or "", keep_blank_values=True)).get("action", "") if "action=" in (body or "") else ""
+    return method.upper(), parts.netloc.lower(), parts.path, action
 
 
 class Replayer:
@@ -77,10 +80,10 @@ class Replayer:
             if _key(r["method"], r["url"], r.get("request_body")) == wanted:
                 self.used.add(i)
                 return r
-        route = _route(method, url)
+        route = _route(method, url, body)
         for i in candidates:
             r = self.http[i]
-            if _route(r["method"], r["url"]) == route:
+            if _route(r["method"], r["url"], r.get("request_body")) == route:
                 self.used.add(i)
                 self.fallbacks.append((method, url))
                 return r

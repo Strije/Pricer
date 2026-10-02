@@ -3,7 +3,8 @@
 В десктопе этого не было: после отправки позиция жила только внутри заказа клиента. Здесь
 каждая позиция, ушедшая поставщику, становится строкой журнала. Статус меняется:
 - автоматически при отправке (принята, без подтверждения, не принята);
-- запросом статусов у поставщика, где поставщик это умеет (сейчас — Tradesoft/Автоформула);
+- запросом статусов у поставщика: Tradesoft (GetItemsStatus) и заказы из личных кабинетов
+  остальных (integrations/supplier_orders.py, перенесено из 1С-обработки); у TISS источника нет;
 - вручную оператором («пришло на склад», «отказ» и т.п.), пока у поставщика нет API статусов.
 
 По истории считается надёжность поставщиков: доля отказов, позиций без подтверждения и
@@ -31,8 +32,12 @@ SUBMIT_TO_STATUS = {"submitted": "submitted", "unknown": "unknown", "failed": "f
 # Тексты статусов поставщиков -> наш код. Порядок важен: сначала более конкретные.
 _KEYWORDS = [
     ("refused", ("отказ", "нет в налич", "снят", "аннул", "отмен", "не поставл", "недопостав")),
-    ("returned", ("возврат",)),
+    ("returned", ("возврат", "возвращ")),
     ("issued", ("выдан", "получен клиент", "отгружен клиент")),
+    # «ждет подтверждения» (Росско) — поставщик заказ видит, но ещё не подтвердил
+    ("submitted", ("ждет подтвержд", "ждёт подтвержд", "ожидает подтвержд")),
+    # «ожидаем поступление», «ожидаем товар на складе» (Росско) — ещё не пришло
+    ("confirmed", ("ожидаем", "ожидается")),
     # «в пути на склад» — ещё в пути: явные признаки пути проверяем раньше «на склад»
     ("in_transit", ("в пути", "в доставке", "передан в доставку")),
     ("arrived", ("на склад", "пришл", "пришёл", "пришел", "поступ", "прибыл", "готов к выдаче", "к выдаче")),
@@ -226,56 +231,148 @@ def refresh_tradesoft(session, organization_id, provider, provider_name):
     return changed
 
 
-def _abcp_items(data):
-    """Списки ABCP приходят то массивом, то объектом {"0": {...}} (как в приложении Abcp)."""
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    if isinstance(data, dict):
-        return [x for x in data.values() if isinstance(x, dict)]
-    return []
-
-
 def _key(value):
     return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
 
 
-def refresh_abcp(session, organization_id, provider, provider_name):
-    """Статусы позиций поставщика на ABCP: заказы клиента (orders) -> позиции по бренду и номеру.
+def _article_key(value):
+    """Артикул для сравнения: только буквы и цифры, без ведущих нулей (АртикулыСовпадают в 1С)."""
+    return _key(value).lstrip("0") or _key(value)
 
-    Позицию сопоставляем по номеру заказа у поставщика (order_number из ответа на оформление),
-    бренду и артикулу; без номера заказа не угадываем.
+
+def _brands_match(a, b):
+    """Пустой бренд (Микадо его не отдаёт) не мешает; «MAHLE» и «MAHLE ORIGINAL» — один бренд."""
+    a, b = _key(a), _key(b)
+    return not a or not b or a == b or a.startswith(b) or b.startswith(a)
+
+
+# Насколько далеко продвинулась позиция: статус поставщика не откатывает её назад
+# (оператор отметил «пришло на склад», а поставщик всё ещё пишет «отгружено»).
+_RANK = {"": 0, "submitted": 0, "unknown": 0, "failed": 0, "confirmed": 1, "in_transit": 2, "arrived": 3,
+         "issued": 4, "refused": 4, "returned": 4}
+
+
+def match_rows(lines, rows):
+    """Строки поставщика -> позиции журнала: {line.id: (alive_rows, refused_rows)}.
+
+    Как ВзятьУПоставщика в 1С: позиция забирает у строк поставщика нужное количество, частичный
+    отказ виден отдельно. Ключи: positionId, номер заказа у поставщика (supplier_ref), метка
+    нашего заказа в комментарии, supplierCode, затем бренд + артикул и близость даты к отправке.
     """
+    pool = []
+    for row in rows:
+        quantity = float(row.get("quantity") or 0)
+        pool.append({"row": row, "left": quantity if quantity > 0 else 1.0, "article": _article_key(row.get("article")),
+                     "date": _parse_dt(row.get("date")), "order": str(row.get("order") or "").strip()})
+    known_orders = {item["order"] for item in pool if item["order"]}
+    result = {}
+    # Сначала позиции с точными ключами: им достаются «свои» строки.
+    ordered_lines = sorted(lines, key=lambda l: (not l.position_id, not l.supplier_ref, l.submitted_at or db.utcnow(), l.id))
+    for line in ordered_lines:
+        article = _article_key(line.article)
+        ref = str(line.supplier_ref or "").strip()
+        strict_ref = ref in known_orders  # номер заказа у поставщика узнан — чужие заказы не берём
+        scored = []
+        for item in pool:
+            row = item["row"]
+            if item["left"] <= 0 or item["article"] != article or not _brands_match(line.brand, row.get("brand")):
+                continue
+            if line.position_id and row.get("position_id") and str(row["position_id"]) != line.position_id:
+                continue
+            if line.supplier_code and row.get("supplier_code") and str(row["supplier_code"]) != line.supplier_code:
+                continue
+            if strict_ref and item["order"] != ref:
+                continue
+            if item["date"] and line.submitted_at and item["date"] < line.submitted_at - datetime.timedelta(days=1):
+                continue  # заказ у поставщика раньше нашей отправки — не наш
+            score = 0.0
+            if line.position_id and str(row.get("position_id") or "") == line.position_id:
+                score += 100
+            if ref and item["order"] == ref:
+                score += 50
+            if line.order_id and line.order_id in str(row.get("comment") or ""):
+                score += 40
+            if line.supplier_code and str(row.get("supplier_code") or "") == line.supplier_code:
+                score += 5
+            if item["date"] and line.submitted_at:
+                score -= min(abs((item["date"] - line.submitted_at).total_seconds()) / 86400, 30) / 10
+            scored.append((score, item))
+        if not scored:
+            continue
+        scored.sort(key=lambda pair: -pair[0])
+        best_order = scored[0][1]["order"]
+        need = float(line.quantity or 0) or 1.0
+        alive, refused = [], []
+        for _, item in scored:
+            if item["order"] != best_order:
+                continue
+            take = min(item["left"], need)
+            if take <= 0:
+                break
+            item["left"] -= take
+            need -= take
+            (refused if item["row"].get("refused") else alive).append((item["row"], take))
+        result[line.id] = (alive, refused)
+    return result
+
+
+def _status_from(alive, refused):
+    if not alive:
+        texts = list(dict.fromkeys(str(row.get("status") or "").strip() for row, _ in refused))
+        return "refused", "; ".join(t for t in texts if t) or "отказ поставщика"
+    texts = list(dict.fromkeys(str(row.get("status") or "").strip() for row, _ in alive))
+    text = "; ".join(t for t in texts if t)
+    code = ""
+    for candidate in texts:  # самый «продвинутый» из статусов живой части
+        found = normalize_status(candidate)
+        if found and _RANK.get(found, 0) >= _RANK.get(code, -1):
+            code = found
+    if refused:
+        cancelled = sum(take for _, take in refused)
+        text = (text + "; " if text else "") + f"отказ {cancelled:g} шт."
+    # Поставщик позицию видит, но статус не узнан — значит, как минимум принята.
+    return code or "confirmed", text or "есть у поставщика"
+
+
+def apply_rows(session, organization_id, provider_name, rows):
+    """Обновляет статусы открытых позиций поставщика по его строкам заказов. Возвращает число изменений."""
     lines = session.query(db.SupplierLine).filter(
         db.SupplierLine.organization_id == organization_id, db.SupplierLine.provider == provider_name,
-        db.SupplierLine.closed.is_(False), db.SupplierLine.supplier_ref != "").all()
-    if not lines:
+        db.SupplierLine.closed.is_(False)).all()
+    if not lines or not rows:
         return 0
-    by_id, by_full_key, by_key = {}, {}, {}
-    for order in _abcp_items(provider.get_orders(limit=100)):
-        number = str(order.get("number") or "").strip()
-        for position in _abcp_items(order.get("positions")):
-            position_id = str(position.get("positionId") or position.get("id") or "").strip()
-            if position_id:
-                by_id[position_id] = position
-            brand, article = _key(position.get("brand")), _key(position.get("number"))
-            supplier_code = str(position.get("supplierCode") or "").strip()
-            by_full_key.setdefault((number, brand, article, supplier_code), position)
-            by_key.setdefault((number, brand, article), position)
+    matched = match_rows(lines, rows)
     changed = 0
     for line in lines:
-        # Как в десктопе: сначала positionId из ответа на заказ, затем ключ «заказ + бренд + номер +
-        # supplierCode» (_position_key), и только потом бренд и номер внутри того же заказа.
-        position = (by_id.get(line.position_id) if line.position_id else None) \
-            or by_full_key.get((line.supplier_ref, _key(line.brand), _key(line.article), line.supplier_code)) \
-            or by_key.get((line.supplier_ref, _key(line.brand), _key(line.article)))
-        if not position:
+        if line.id not in matched:
             continue
-        text = str(position.get("status") or "").strip()
-        code = normalize_status(text)
-        if code and (code != line.status or text != line.status_text):
-            add_event(session, line, code, text, source="supplier")
-            changed += 1
+        code, text = _status_from(*matched[line.id])
+        if code == "refused" or _RANK.get(code, 0) >= _RANK.get(line.status, 0):
+            if code != line.status or text[:500] != line.status_text:
+                add_event(session, line, code, text, source="supplier")
+                changed += 1
     return changed
+
+
+def refresh_from_supplier(fetch_rows, days=60):
+    """refresh-функция для поставщика со строками заказов (integrations/supplier_orders.py)."""
+    def refresh(session, organization_id, provider, provider_name):
+        has_open = session.query(db.SupplierLine.id).filter(
+            db.SupplierLine.organization_id == organization_id, db.SupplierLine.provider == provider_name,
+            db.SupplierLine.closed.is_(False)).first()
+        if not has_open:
+            return 0  # не дёргаем поставщика зря
+        since = (db.utcnow() - datetime.timedelta(days=days)).date()
+        return apply_rows(session, organization_id, provider_name, fetch_rows(provider, since))
+    return refresh
+
+
+def refresh_abcp(session, organization_id, provider, provider_name):
+    """Статусы позиций поставщика на ABCP (orders): positionId и supplierCode десктопа, номер заказа,
+    бренд и номер; частичная поставка (quantity меньше quantityOrdered) — частичный отказ."""
+    from supplier_orders import abcp_orders
+
+    return refresh_from_supplier(abcp_orders)(session, organization_id, provider, provider_name)
 
 
 def fetcher_for(provider):
@@ -283,6 +380,9 @@ def fetcher_for(provider):
     names = {cls.__name__ for cls in type(provider).__mro__}
     if "TradesoftProvider" in names:
         return refresh_tradesoft
-    if "AbcpSupplierProvider" in names and callable(getattr(provider, "get_orders", None)):
+    if "AbcpSupplierProvider" in names:
         return refresh_abcp
-    return None
+    import supplier_orders
+
+    fetch_rows = supplier_orders.fetcher_for(provider)
+    return refresh_from_supplier(fetch_rows) if fetch_rows else None

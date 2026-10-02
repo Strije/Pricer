@@ -102,3 +102,37 @@ def test_md5_of_password_is_treated_as_secret():
 
     secrets = tool.collect_secrets(SETTINGS)
     assert hashlib.md5(b"Pa$$/word1").hexdigest() in secrets
+
+
+def test_statuses_mode_records_rows_and_hides_phones(tmp_path, monkeypatch):
+    """--statuses: заказы из личных кабинетов теми же функциями, что у веб-версии."""
+    import armtek
+
+    out = tmp_path / "st.jsonl"
+    recorder = tool.Recorder(str(out), tool.collect_secrets(SETTINGS))
+    recorder.hide_phones = True
+    provider = armtek.ArmtekProvider("l", "p", "4000", "43")
+
+    def fake_send(self, request, *args, **kwargs):
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps({"RESP": {"DATA": [
+            {"ORDER": "1", "PIN": "OC90", "BRAND": "KNECHT", "KWMENG": "1", "STATUS": "В работе",
+             "NOTE": "Иван 8 (912) 345-67-89"}]}}, ensure_ascii=False).encode()
+        response.request = request
+        return response
+
+    monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+    original = tool.install_http_recorder(recorder)
+    try:
+        backend = os.path.join(ROOT, "backend")
+        assert tool.record_statuses([provider, object()], recorder, backend, days=7) == 0
+    finally:
+        HTTPAdapter.send = original
+    recorder.close()
+    records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    result = next(r for r in records if r["type"] == "statuses_result")
+    assert result["rows"][0]["status"] == "В работе"
+    text = out.read_text(encoding="utf-8")
+    assert "345-67-89" not in text and "+7***" in text
+    assert tool.record_statuses([], recorder, str(tmp_path), days=1) == 1  # нет веб-версии — понятная ошибка

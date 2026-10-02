@@ -82,7 +82,7 @@ def test_abcp_status_refresh_from_orders():
         session.commit()
 
         class Provider:
-            def get_orders(self, limit=100):
+            def get_orders(self, limit=100, skip=0):
                 return {"1001": {"number": "1001", "positions": {
                     "0": {"brand": "VAG", "number": "04E115561H", "status": "Готово к выдаче"},
                     "1": {"brand": "NGK", "number": "LZKR6B10E", "status": "В пути"}}}}
@@ -137,7 +137,7 @@ def test_abcp_match_by_position_id_and_supplier_code():
         session.commit()
 
         class Provider:
-            def get_orders(self, limit=100):
+            def get_orders(self, limit=100, skip=0):
                 return [{"number": "2002", "positions": [
                     {"brand": "ZIC", "number": "162622", "supplierCode": "S2", "positionId": "P-9", "status": "Отказ поставщика"},
                     {"brand": "ZIC", "number": "162622", "supplierCode": "S1", "positionId": "P-8", "status": "В пути"}]}]

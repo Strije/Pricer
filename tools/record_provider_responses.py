@@ -9,6 +9,14 @@
 итоговый результат подбора по каждой строке. Заказы НЕ оформляются: методы
 корзины у поставщиков на время записи заблокированы.
 
+Режим --statuses: вместо поиска запрашивает заказы и статусы позиций из личных
+кабинетов поставщиков (функции веб-версии backend/integrations/supplier_orders.py,
+перенесённые из 1С-обработки) и пишет их ответы — так проверяются реальные форматы:
+
+    .venv\\Scripts\\python.exe record_provider_responses.py --statuses --days 30 --pricer-backend C:\\Pricer-web\\backend
+
+Эти запросы только читают. Телефоны в ответах (комментарии к заказам) тоже маскируются.
+
 Секреты маскируются: значения ключей, паролей, логинов, телефонов и токенов из
 settings.json заменяются на ***, заголовки Authorization и Cookie не пишутся.
 После записи файл проверяется ещё раз, и если в нём нашёлся секрет, он удаляется.
@@ -127,10 +135,13 @@ class Recorder:
         self.secrets = secrets
         self.lock = threading.Lock()
         self.seq = 0
+        self.hide_phones = False
         self.file = open(path, "w", encoding="utf-8")
 
     def write(self, record):
         text = mask(json.dumps(record, ensure_ascii=False, default=str), self.secrets)
+        if self.hide_phones:
+            text = mask_phones(text)
         try:
             record = json.loads(text)
         except ValueError:
@@ -206,6 +217,42 @@ def block_ordering(providers):
                 setattr(provider, name, refuse)
 
 
+PHONE_RE = re.compile(r"(?<!\d)(?:\+7|8)[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
+
+
+def mask_phones(text):
+    return PHONE_RE.sub("+7***", text or "")
+
+
+def record_statuses(providers, recorder, backend_dir, days):
+    """Заказы из личных кабинетов: тот же код, что у веб-версии, на ваших настройках."""
+    integrations = os.path.join(backend_dir, "integrations")
+    if not os.path.isfile(os.path.join(integrations, "supplier_orders.py")):
+        print(f"не найден {integrations}\\supplier_orders.py — укажите --pricer-backend")
+        return 1
+    sys.path.append(integrations)  # в конец: модули программы не подменяются
+    import supplier_orders
+
+    since = datetime.date.today() - datetime.timedelta(days=days)
+    for provider in providers:
+        name = getattr(provider, "DISPLAY_NAME", "") or type(provider).__name__
+        fetch = supplier_orders.fetcher_for(provider)
+        if fetch is None:
+            print(f"{name}: метода заказов нет — пропуск")
+            continue
+        recorder.write({"type": "statuses_start", "provider": name, "class": type(provider).__name__,
+                        "since": since.isoformat()})
+        try:
+            rows = fetch(provider, since)
+            recorder.write({"type": "statuses_result", "provider": name, "rows": rows})
+            refused = sum(1 for row in rows if row.get("refused"))
+            print(f"{name}: строк {len(rows)}, отказов {refused}")
+        except Exception as exc:
+            recorder.write({"type": "statuses_result", "provider": name, "error": f"{type(exc).__name__}: {exc}"})
+            print(f"{name}: ошибка {type(exc).__name__}: {str(exc)[:150]}")
+    return 0
+
+
 def verify_no_secrets(path, secrets):
     with open(path, encoding="utf-8") as file:
         text = file.read()
@@ -217,11 +264,18 @@ def verify_no_secrets(path, secrets):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Запись сырых ответов поставщиков")
-    parser.add_argument("items", nargs="+", help="БРЕНД:АРТИКУЛ, например ZIC:162622")
+    parser.add_argument("items", nargs="*", help="БРЕНД:АРТИКУЛ, например ZIC:162622")
+    parser.add_argument("--statuses", action="store_true", help="записать заказы и статусы из личных кабинетов")
+    parser.add_argument("--days", type=int, default=30, help="за сколько дней брать заказы (для --statuses)")
+    parser.add_argument("--pricer-backend", default=r"C:\Pricer-web\backend",
+                        help="папка backend веб-версии (для --statuses)")
     parser.add_argument("-o", "--output", default="", help="файл JSONL (по умолчанию recordings-ДАТА.jsonl)")
     parser.add_argument("--quantity", type=int, default=1)
     parser.add_argument("--with-analogs", action="store_true", help="искать с аналогами")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.items and not args.statuses:
+        parser.error("укажите БРЕНД:АРТИКУЛ или --statuses")
+    return args
 
 
 def main(argv=None):
@@ -239,6 +293,7 @@ def main(argv=None):
         here, f"recordings-{datetime.datetime.now():%Y%m%d-%H%M%S}.jsonl"
     )
     recorder = Recorder(output, secrets)
+    recorder.hide_phones = args.statuses
     install_http_recorder(recorder)
 
     from PyQt6.QtWidgets import QApplication
@@ -260,6 +315,12 @@ def main(argv=None):
         "max_days": None,
     }
     print(f"поставщиков: {len(window.providers)}, запись в {output}")
+    if args.statuses:
+        code = record_statuses(window.providers, recorder, args.pricer_backend, args.days)
+        if code:
+            recorder.close()
+            os.remove(output)
+            return code
 
     for item in args.items:
         brand, _, article = item.partition(":")
