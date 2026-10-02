@@ -1,9 +1,8 @@
 # План переноса Pricer (десктоп PyQt6) в веб-приложение
 
-Статус: черновик по результатам изучения `main.py`, `provider_adapter.py`, `cart_store.py`,
-`order_store.py`, `cross_store.py`, `markup_editor.py`, `offer_normalizer.py`,
-`bulk_pricing.py`, `test_bulk_order.py` и батника запуска.
-Остальные модули (поставщики, поиск, бренды) ещё не изучены, см. раздел «Открытые вопросы».
+Статус: план по результатам изучения полного набора из 50 файлов (около 26,5 тыс. строк,
+из них `main.py` 7000). Не присланы `requirements.txt`, `scripts/check_install.py`,
+образец `settings.json` и тесты, кроме `test_bulk_order.py`.
 
 > В репозиторий не попадают секреты: ключи, пароли и `settings.json` с реальными значениями
 > хранятся только вне git (см. раздел «Секреты»).
@@ -169,14 +168,71 @@ idempotency key и блокировкой на уровне БД, журнал �
 - Нужны ли роли и ограничение видимости закупочных цен.
 - Что делать со старыми заказами: импортировать все или только открытые.
 
-## 9. Не изучено, нужно для уточнения плана
+## 9. Результаты изучения всех модулей
 
-- **Поставщики:** `pr_lg`, `favorit`, `armtek`, `forum_auto`, `mikado`, `abstd`, `rossko`,
-  `avtoto`, `tiss_tmparts`, `tradesoft`, `abcp_supplier`, `abcp_reference`, `url_csv_provider`.
-- **Ядро поиска:** `brand_resolver`, `brand_aliases`, `cross_targets`, `result_limiter`,
-  `provider_health`, `provider_result_cache`, `search_state`, `article_suggestions`.
-- **Заказы:** `bulk_order`, `bulk_price_cli`, `order_quantity`, `order_history_store`,
-  `sales_report_importer`.
-- **UI:** `settings_page`, `cart_page`, `orders_page`, `order_file_page`, `prices_page`,
-  `pricing_table`, `result_filters_panel` (нужны для переноса экранов).
-- **Скрипты:** `scripts/check_install.py`, `requirements.txt`.
+**Размер и состав.** 50 файлов, 26 564 строки. 34 модуля не зависят от Qt (поставщики, хранилища,
+нормализация, кроссы, бренды, чтение файлов), 13 модулей заняты интерфейсом (`settings_page` 2296
+строк, `orders_page` 1656, `order_file_page`, `cart_page`, `brand_editor`, `sidebar`, `pricing_table`
+и другие) и переписываются на React. Хардкодных ключей и паролей в коде нет, секреты живут в
+`settings.json`.
+
+**Главная находка: движок поиска и заказов находится внутри `SkitchenApp` (`main.py`).**
+Даже консольный `bulk_price_cli.py` создаёт `QApplication` и целое окно `SkitchenApp`, чтобы вызвать
+`_search_order_file_row`. Значит на этапе 0 нужно вынуть из класса в сервисы без Qt примерно
+3500 строк:
+
+| Блок в `main.py` | Куда |
+|---|---|
+| `run_query`, `_resolve_brand_and_run`, `_collect_cross_targets`, `_search_crosses`, `compact_results` | `core/search_engine.py` |
+| `_search_order_file_row`, `_order_file_selectable_offers`, `_order_file_result` | `core/order_file.py` |
+| `_recheck_order_thread`, `_match_order_offer`, `_best_recheck_offer`, `_apply_rechecked_offer` | `core/order_recheck.py` |
+| `_submit_order_thread`, `_order_submit_preflight` | `core/order_submit.py` |
+| `apply_markup`, `_warehouse_extra_for_item`, фильтры, `_apply_sale_price` | `core/pricing.py`, `core/filters.py` |
+| `load_settings` (дефолты настроек) | `app/settings_schema.py` на Pydantic |
+
+**Поставщики.** Единый неформальный интерфейс: `get_prices(article[, brand])`,
+`get_brand_candidates(article)`, `get_brands(article)`, `add_to_basket(item, quantity, comment)`,
+`add_to_basket_batch(rows, comment)`, плюс `ping`/`check_connection`. Транспорт у разных
+поставщиков разный: REST/JSON (Armtek, Favorit, Profit-League, Forum-Auto, ABCP, Tradesoft,
+ABSTD, TMParts), SOAP через `zeep` (Rossko), SOAP/POST (Avtoto), XML (Mikado), CSV по URL.
+Рекомендация: описать интерфейс как `Protocol` с типизированными моделями, а адаптеры оставить
+синхронными на `requests`/`zeep` в пуле потоков воркера. Переписывать на async не нужно.
+
+**Что не переносится как есть.**
+
+1. **`one_c_provider.py`** использует `win32com` (COM-коннектор 1С, только Windows, пароль в
+   строке подключения). На Linux-сервере не запустится. Нужно решить: нужен ли он вообще, или
+   заменяем на выгрузку/HTTP-сервис 1С, или оставляем маленький Windows-агент.
+2. **`config_path.py`**: пути к `%APPDATA%`, `config/`, режим portable `.exe`. Заменяются на
+   переменные окружения и БД.
+3. **`detailed_logger.py`, `provider_diagnostics.py`**: файловые логи и отладка. Заменяются на
+   структурные логи и таблицу событий.
+4. **`SearchState`, `ProviderResultCache`, `ProviderCircuitBreaker`** держат состояние в памяти
+   процесса. В вебе с несколькими воркерами состояние переносим в Redis (кэш с TTL, circuit
+   breaker по поставщику, текущий `search_id` по пользователю). Кэш стоит ключевать с учётом
+   настроек поставщиков, а не только артикула.
+5. **Armtek** по умолчанию ходит по `http://` (без TLS) и перебирает несколько хостов. Перед
+   переносом проверить, что поставщик поддерживает HTTPS на всех адресах, и использовать его.
+6. **`requests.Session` с `trust_env=False`** обходит системные прокси. На сервере нужно
+   задать это явно через конфиг, иначе исходящие запросы пойдут не тем путём.
+
+**Сложность по блокам (для оценки).**
+
+| Блок | Строк | Риск |
+|---|---:|---|
+| Движок поиска и заказов в `main.py` | ~3500 | высокий: логика в методах окна, тестов нет |
+| `url_csv_provider` (локальный кэш прайсов, подсказки, поиск) | 1167 | средний: нужен переход на Postgres |
+| `avtoto` | 939 | средний |
+| Остальные 12 адаптеров | 327–577 каждый | средний: нужны записанные ответы |
+| Экраны на React | ~7000 строк Qt | средний: объём, но логика уже выделена |
+
+С учётом этого оценка для одного разработчика: **8–10 недель** вместо 6–8. Основная прибавка
+приходится на вынос движка из `main.py` и тесты адаптеров.
+
+## 10. Следующие шаги
+
+1. Решение по `one_c_provider` (нужен ли и как подключаться).
+2. Образец `settings.json` с заглушками, `requirements.txt`, `scripts/check_install.py`.
+3. Этап 0: перенести 34 модуля без Qt в `backend/core`, затем вынуть движок из `main.py`.
+4. Записать эталонные ответы поставщиков (без ключей) и написать характеризующие тесты до
+   рефакторинга движка.
