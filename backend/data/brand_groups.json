@@ -1,0 +1,244 @@
+[
+  {
+    "canonical": "MANN",
+    "aliases": [
+      "MANN-FILTER",
+      "MANN FILTER",
+      "MANN+HUMMEL"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "BMW",
+    "aliases": [
+      "BMW AG"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "MAHLE",
+    "aliases": [
+      "KNECHT",
+      "KNECHT FILTER",
+      "MAHLE/KNECHT",
+      "mahle / knecht",
+      "MAHLE KNECHT",
+      "BEHR",
+      "MAHLE BEHR",
+      "BEHRMAHLE"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "HYUNDAI",
+    "aliases": [
+      "KIA",
+      "MOBIS",
+      "HYUNDAI-KIA",
+      "HYUNDAI KIA",
+      "HYUNDAI/KIA",
+      "HYUNDAI/KIA/MOBIS",
+      "HYUNDAI KIA MOBIS",
+      "KIA-HYUNDAI",
+      "KIA HYUNDAI",
+      "KIA/HYUNDAI",
+      "MOBIS/KIA/HYUNDAI"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "RENAULT",
+    "aliases": [
+      "RENAU",
+      "RENAULT GROUP",
+      "RENAULT ORIJINAL",
+      "MAIS",
+      "OE RENAULT",
+      "RVI",
+      "RENAULT/DACIA",
+      "RENAULT S.A.",
+      "RENAULT, RENAULT KOREA",
+      "RENAULT KOREA",
+      "RENAULT-SAMSUNG"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "trw",
+    "aliases": [
+      "Lucas",
+      "LUCAS/TRW"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "TOYOTA/LEXUS",
+    "aliases": [
+      "TOYOTA",
+      "DAIHATSU",
+      "toyota-lexus",
+      "LEXUS"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "SNR",
+    "aliases": [
+      "SNR/NTN",
+      "NTN",
+      "NTN-SNR"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "LPR",
+    "aliases": [
+      "AP"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "KRAUF",
+    "aliases": [
+      "Motorherz"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "ina",
+    "aliases": [
+      "LUK"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "ITP",
+    "aliases": [
+      "FPI"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "Howo",
+    "aliases": [
+      "Sitrak",
+      "sinotruk"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "HONDA",
+    "aliases": [
+      "ACURA"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "GWM",
+    "aliases": [
+      "great wall/haval",
+      "HAVAL",
+      "GREAT WALL",
+      "TANK",
+      "WEY",
+      "ORA",
+      "Great Wall-HAVAL"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "GM",
+    "aliases": [
+      "DAEWOO",
+      "UZDAEWOO",
+      "CHEVROLET",
+      "OPEL",
+      "GENERAL MOTORS",
+      "ZAZ"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "GKN",
+    "aliases": [
+      "LOBRO",
+      "Loebro",
+      "GKN (Loebro)",
+      "GKN-Spidan",
+      "SPIDAN"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "Frixa",
+    "aliases": [
+      "Hankook",
+      "Hankook Frixa"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "Fiat",
+    "aliases": [
+      "Alfa",
+      "Lancia"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "CITROEN",
+    "aliases": [
+      "peugeot / citroen",
+      "Peugeot",
+      "PSA",
+      "PEUGEOT-CITROEN"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "CHERY",
+    "aliases": [
+      "CHINA",
+      "COMPONENT",
+      "EXEED",
+      "UNKNOWN BRAND",
+      "WHCQ",
+      "КИТАЙ",
+      "РОССИЯ",
+      "ЧЕТЫРНАДЦАТЬ",
+      "chery (китай)",
+      "JAECOO",
+      "AUTOCOMPONENT"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "Febi",
+    "aliases": [
+      "FEBI",
+      "FEBI BILSTEIN",
+      "FEBI+BILSTEIN",
+      "FEBI-BILSTEIN",
+      "febi_bilstein",
+      "FEBIBILSTEIN"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "3Ton",
+    "aliases": [
+      "3TON",
+      "3 TON",
+      "3-TON"
+    ],
+    "providers": {}
+  },
+  {
+    "canonical": "GraSS",
+    "aliases": [
+      "GRASS",
+      "Grass"
+    ],
+    "providers": {}
+  }
+]
