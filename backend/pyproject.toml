@@ -18,3 +18,12 @@ dev = ["pytest>=8.0", "httpx>=0.27"]
 # Модули ядра пока плоские (import provider_adapter); пакет core появится на следующем шаге.
 pythonpath = [".", "core", "integrations"]
 testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Код запускается из папки backend (pythonpath задан выше и в app/server.py), пакетом он не ставится:
+# pip install -e . нужен только ради зависимостей.
+packages = []

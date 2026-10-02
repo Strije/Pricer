@@ -19,7 +19,7 @@
 
 ```bash
 cd backend
-pip install -e ".[dev]"
+pip install -r requirements.txt
 # демонстрация на записанных ответах, без сети и без учётных записей:
 PRICER_REPLAY=1 uvicorn app.server:app --port 8000
 # с настоящими поставщиками (settings.json десктопа, в репозиторий не кладётся):
