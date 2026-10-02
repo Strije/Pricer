@@ -58,6 +58,29 @@
   tr.selected td { background: var(--best); font-weight: 600; }
   .an { color: var(--analog); font-weight: 700; font-size: 11px; margin-left: 4px; }
   .hide-purchase .purchase { display: none; }
+  .hidden { display: none !important; }
+  .auth { max-width: 380px; margin: 48px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
+  .auth h2 { margin: 0 0 14px; font-size: 18px; }
+  .auth label { margin-bottom: 10px; } .auth input { width: 100%; }
+  .auth .switch { margin-top: 12px; font-size: 13px; color: var(--muted); }
+  a.link, button.link { color: var(--accent); background: none; border: 0; padding: 0; font: inherit; font-weight: 500; cursor: pointer; }
+  .msg { min-height: 20px; color: var(--bad); font-size: 13px; margin: 6px 0; }
+  .msg.ok { color: var(--ok); }
+  .user { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 13px; color: var(--muted); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tab { background: none; color: var(--muted); border-radius: 8px 8px 0 0; padding: 8px 14px; font-weight: 600; }
+  .tab.active { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  form.card { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .card h3 { margin: 0 0 10px; font-size: 15px; display: flex; justify-content: space-between; gap: 8px; }
+  .card label { margin-bottom: 8px; } .card input[type=text], .card input[type=password], .card input[type=number], .card textarea { width: 100%; }
+  textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-height: 70px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button.secondary { background: var(--accent-soft); color: var(--accent); }
+  button.danger { background: var(--bad-soft); color: var(--bad); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .note { font-size: 12px; color: var(--muted); }
   @media (max-width: 640px) { main { padding: 12px 16px 32px; } #brand, #article { width: 100%; } form > * { flex: 1 1 140px; } }
 </style>
 </head>
@@ -65,8 +88,28 @@
 <header>
   <h1>Pricer</h1><span class="sub">проценка по всем поставщикам</span>
   <span class="badge" id="replay" hidden>демонстрация на записанных ответах</span>
+  <span class="user hidden" id="userbox"><span id="who"></span><button class="link" id="logout">Выйти</button></span>
 </header>
-<main>
+<section class="auth hidden" id="auth">
+  <h2 id="auth-title">Вход</h2>
+  <form id="auth-form" style="display:block;border:0;padding:0">
+    <label>Email <input id="a-email" type="email" required autocomplete="username"></label>
+    <label>Пароль <input id="a-pass" type="password" required minlength="8" autocomplete="current-password"></label>
+    <div id="reg-fields" class="hidden">
+      <label>Организация <input id="a-org" autocomplete="organization"></label>
+      <label>Ваше имя <input id="a-name" autocomplete="name"></label>
+    </div>
+    <div class="msg" id="auth-msg"></div>
+    <button id="auth-go">Войти</button>
+  </form>
+  <div class="switch" id="auth-switch"></div>
+</section>
+<main class="hidden" id="app">
+  <nav class="tabs">
+    <button class="tab active" data-tab="search">Поиск</button>
+    <button class="tab" data-tab="suppliers">Поставщики</button>
+  </nav>
+  <section id="tab-search">
   <form id="form">
     <label>Бренд <input id="brand" required value="MANN" autocomplete="off"></label>
     <label>Артикул <input id="article" required value="W712/95" autocomplete="off"></label>
@@ -102,6 +145,25 @@
       <tbody id="rows"></tbody>
     </table>
   </div>
+  </section>
+  <section id="tab-suppliers" class="hidden">
+    <div class="panel">
+      <div class="row">
+        <strong>Импорт из десктопной программы</strong>
+        <input type="file" id="import-file" accept=".json,application/json">
+        <button class="secondary" id="import-go">Импортировать settings.json</button>
+      </div>
+      <div class="note">Заменяет всех поставщиков организации и переносит наценки и фильтры. Пароли и ключи шифруются на сервере.</div>
+      <div class="msg" id="import-msg"></div>
+    </div>
+    <div class="panel row">
+      <strong>Добавить поставщика</strong>
+      <select id="add-section"></select>
+      <button class="secondary" id="add-go">Добавить</button>
+      <span class="msg" id="add-msg"></span>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -118,7 +180,120 @@ const applyCustomer = () => {
 };
 $("customer").addEventListener("change", applyCustomer); applyCustomer();
 
-fetch("/api/status").then((r) => r.json()).then((s) => { $("replay").hidden = !s.replay_mode; renderChips(s.providers, {}); });
+async function api(path, opts = {}) {
+  const headers = {"X-Requested-With": "pricer", ...(opts.headers || {})};
+  let body = opts.body;
+  if (body && !(body instanceof FormData)) { headers["Content-Type"] = "application/json"; body = JSON.stringify(body); }
+  const resp = await fetch(path, {...opts, headers, body});
+  if (resp.status === 401 && !path.startsWith("/api/auth/")) { showAuth(); throw new Error("нужно войти"); }
+  const data = resp.headers.get("content-type")?.includes("json") ? await resp.json() : null;
+  if (!resp.ok) {
+    const d = data && data.detail;
+    throw new Error(Array.isArray(d) ? d.map((x) => x.msg).join("; ") : (d || "ошибка " + resp.status));
+  }
+  return data;
+}
+
+let registering = false, catalog = {}, signupAllowed = true;
+function setAuthMode(reg) {
+  registering = reg;
+  $("auth-title").textContent = reg ? "Регистрация организации" : "Вход";
+  $("auth-go").textContent = reg ? "Зарегистрироваться" : "Войти";
+  $("reg-fields").classList.toggle("hidden", !reg);
+  $("a-org").required = reg;
+  $("a-pass").autocomplete = reg ? "new-password" : "current-password";
+  $("auth-switch").innerHTML = !signupAllowed ? "" : reg
+    ? 'Уже есть аккаунт? <button class="link" id="sw">Войти</button>'
+    : 'Нет аккаунта? <button class="link" id="sw">Зарегистрировать организацию</button>';
+  if ($("sw")) $("sw").onclick = () => setAuthMode(!registering);
+  $("auth-msg").textContent = "";
+}
+function showAuth() { $("app").classList.add("hidden"); $("userbox").classList.add("hidden"); $("auth").classList.remove("hidden"); }
+async function boot() {
+  const pub = await api("/api/public"); signupAllowed = pub.allow_signup; $("replay").hidden = !pub.replay_mode;
+  setAuthMode(false);
+  try {
+    const me = await api("/api/me");
+    $("who").textContent = `${me.organization} · ${me.email}`;
+    $("auth").classList.add("hidden"); $("app").classList.remove("hidden"); $("userbox").classList.remove("hidden");
+    renderChips(me.providers, {});
+    catalog = await api("/api/catalog");
+    $("add-section").innerHTML = Object.entries(catalog).map(([k, v]) => `<option value="${k}">${esc(v.title)}</option>`).join("");
+  } catch (e) { showAuth(); }
+}
+$("auth-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const body = {email: $("a-email").value.trim(), password: $("a-pass").value};
+    if (registering) Object.assign(body, {organization: $("a-org").value.trim(), name: $("a-name").value.trim()});
+    await api(registering ? "/api/auth/register" : "/api/auth/login", {method: "POST", body});
+    $("a-pass").value = ""; await boot();
+  } catch (err) { $("auth-msg").textContent = err.message; }
+});
+$("logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}).catch(() => {}); showAuth(); };
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+  $("tab-search").classList.toggle("hidden", t.dataset.tab !== "search");
+  $("tab-suppliers").classList.toggle("hidden", t.dataset.tab !== "suppliers");
+  if (t.dataset.tab === "suppliers") loadSuppliers();
+});
+
+async function loadSuppliers() {
+  const list = await api("/api/suppliers");
+  $("cards").innerHTML = list.length ? "" : '<div class="note">Поставщики не подключены. Импортируйте settings.json или добавьте поставщика.</div>';
+  for (const acc of list) $("cards").appendChild(supplierCard(acc));
+}
+function supplierCard(acc) {
+  const spec = catalog[acc.section] || {fields: []};
+  const card = document.createElement("form"); card.className = "card";
+  const inputs = spec.fields.map((f) => {
+    const id = `f-${acc.id}-${f.name}`, val = acc.config[f.name];
+    if (f.type === "bool") return `<label class="check"><input type="checkbox" id="${id}" ${val ? "checked" : ""}> ${esc(f.label)}</label>`;
+    if (f.type === "secret") {
+      const set = acc.secrets_set.includes(f.name);
+      if (f.name === "url_profiles") return set ? `<div class="note">${esc(f.label)}: сохранены (меняются импортом)</div>` : "";
+      if (f.name === "urls") return `<label>${esc(f.label)} <textarea id="${id}" placeholder="${set ? "сохранены — оставьте пустым, чтобы не менять" : "по одной ссылке в строке"}"></textarea></label>`;
+      return `<label>${esc(f.label)} <input type="password" id="${id}" autocomplete="new-password" placeholder="${set ? "сохранено — оставьте пустым" : ""}"></label>`;
+    }
+    return `<label>${esc(f.label)} <input type="${f.type === "int" ? "number" : "text"}" id="${id}" value="${esc(val ?? "")}"></label>`;
+  }).join("");
+  card.innerHTML = `<h3><span>${esc(acc.name)}</span><span class="note">${esc(acc.title)}</span></h3>${inputs}
+    <div class="row"><button>Сохранить</button><button type="button" class="danger" data-del>Удалить</button><span class="msg"></span></div>`;
+  const msg = card.querySelector(".msg");
+  card.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const config = {}, secrets = {};
+    for (const f of spec.fields) {
+      const el = card.querySelector(`#f-${acc.id}-${f.name}`); if (!el) continue;
+      if (f.type === "bool") config[f.name] = el.checked;
+      else if (f.type === "int") config[f.name] = el.value === "" ? null : Number(el.value);
+      else if (f.type === "secret") { if (el.value.trim()) secrets[f.name] = f.name === "urls" ? el.value.split(/\n+/).map((x) => x.trim()).filter(Boolean) : el.value; }
+      else config[f.name] = el.value;
+    }
+    try { await api(`/api/suppliers/${acc.id}`, {method: "PUT", body: {config, secrets}}); msg.className = "msg ok"; msg.textContent = "Сохранено"; boot(); }
+    catch (err) { msg.className = "msg"; msg.textContent = err.message; }
+  });
+  card.querySelector("[data-del]").onclick = async () => {
+    if (!confirm(`Удалить «${acc.name}»?`)) return;
+    try { await api(`/api/suppliers/${acc.id}`, {method: "DELETE"}); loadSuppliers(); boot(); } catch (err) { msg.textContent = err.message; }
+  };
+  return card;
+}
+$("add-go").onclick = async () => {
+  try { await api("/api/suppliers", {method: "POST", body: {section: $("add-section").value}}); $("add-msg").textContent = ""; loadSuppliers(); }
+  catch (err) { $("add-msg").textContent = err.message; }
+};
+$("import-go").onclick = async () => {
+  const file = $("import-file").files[0];
+  if (!file) { $("import-msg").textContent = "Выберите файл settings.json"; return; }
+  const fd = new FormData(); fd.append("file", file);
+  try {
+    const r = await api("/api/import/settings", {method: "POST", body: fd});
+    $("import-msg").className = "msg ok"; $("import-msg").textContent = `Импортировано поставщиков: ${r.accounts}`;
+    $("import-file").value = ""; loadSuppliers(); boot();
+  } catch (err) { $("import-msg").className = "msg"; $("import-msg").textContent = err.message; }
+};
+boot();
 
 function renderChips(names, states) {
   $("providers").innerHTML = names.map((n) => {
@@ -137,9 +312,7 @@ $("form").addEventListener("submit", async (e) => {
                 quantity: Number($("quantity").value) || 1, with_analogs: $("analogs").checked, strategy: $("strategy").value};
   const started = performance.now();
   try {
-    const resp = await fetch("/api/search", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-    if (!resp.ok) throw new Error("сервер ответил " + resp.status);
-    const {job_id, providers} = await resp.json();
+    const {job_id, providers} = await api("/api/search", {method: "POST", body});
     const states = {}; renderChips(providers, states);
     const es = new EventSource(`/api/search/${job_id}/events`);
     es.addEventListener("provider", (ev) => { const s = JSON.parse(ev.data); states[s.provider] = s; renderChips(providers, states); });

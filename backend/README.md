@@ -12,20 +12,32 @@
 Секреты (`settings.json`, ключи поставщиков) в репозиторий не добавляются, см. `.gitignore`.
 Не перенесено: `one_c_provider.py` (COM, только Windows), все модули с PyQt6, `main.py`.
 
-## Веб-сервис (первая версия)
+## Веб-сервис
 
-`app/server.py` — FastAPI поверх `core/engine.py`: страница поиска, `POST /api/search` и поток
-событий `GET /api/search/{id}/events` (SSE: итог по каждому поставщику, затем результат).
+`app/server.py` — FastAPI поверх `core/engine.py`:
+- организации и пользователи (регистрация, вход, сессия в HttpOnly-cookie, пароли — scrypt);
+- поставщики организации (`/api/suppliers`), импорт `settings.json` десктопа (`/api/import/settings`):
+  логины, пароли и ключи шифруются (Fernet) и через API не отдаются — только признак «сохранено»;
+- поиск по поставщикам своей организации: `POST /api/search` и поток событий
+  `GET /api/search/{id}/events` (SSE: итог по каждому поставщику, затем результат).
 
-```bash
-cd backend
-pip install -r requirements.txt
-# демонстрация на записанных ответах, без сети и без учётных записей:
-PRICER_REPLAY=1 uvicorn app.server:app --port 8000
-# с настоящими поставщиками (settings.json десктопа, в репозиторий не кладётся):
-PRICER_SETTINGS=/путь/к/settings.json uvicorn app.server:app --port 8000
+Данные лежат в `backend/var` (база `pricer.db`, ключ шифрования `secret.key`, справочник брендов).
+Папка в `.gitignore`. **`secret.key` нельзя терять** (без него сохранённые пароли не расшифровать)
+**и нельзя публиковать.** На сервере ключ лучше задать переменной `PRICER_SECRET_KEY`.
+
+Запуск в PowerShell (из `backend`):
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+# демонстрация на записанных ответах, без сети:
+$env:PRICER_REPLAY = "1"
+.venv\Scripts\python.exe -m uvicorn app.server:app --port 8000
 ```
 
-Открыть http://localhost:8000. Ограничения первой версии: нет авторизации (запускать только
-локально или за закрытым доступом), поиски выполняются по очереди, «вид для клиента» пока
-скрывает закупку только в браузере.
+Открыть http://localhost:8000, зарегистрировать организацию, на вкладке «Поставщики»
+импортировать `settings.json`. Для работы с настоящими поставщиками запускать без `PRICER_REPLAY`
+(`$env:PRICER_REPLAY = ""`).
+
+Ограничения: нет защиты от перебора паролей и сброса пароля, нет приглашения сотрудников в
+организацию, «вид для клиента» пока скрывает закупку только в браузере. Работать в интернете без
+HTTPS (`PRICER_SECURE_COOKIES=1`) нельзя.
