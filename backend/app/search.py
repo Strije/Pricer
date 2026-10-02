@@ -12,9 +12,11 @@ import re
 UNKNOWN_HOURS = 999999 * 24
 WARRANTY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "brand_warranty.json")
 _warranty = None
-# Порог автовыбора: лидер назван не меньше чем половиной ответивших и вдвое чаще второго.
+# Порог автовыбора: лидер назван не меньше чем половиной ответивших и в 1,5 раза чаще второго
+# (с упоминаниями в названиях). Запись 02.10.2026: W71295 — MANN 7 против Redskin 4 берём сами,
+# OC90 — MAHLE 7+2 против AM POINT 7 спрашиваем.
 DEFAULT_BRAND_SHARE = 0.5
-DEFAULT_BRAND_LEAD = 2.0
+DEFAULT_BRAND_LEAD = 1.5
 
 SEARCH_FIELDS = (
     "provider", "brand", "display_brand", "article", "name", "available_quantity", "minimum_quantity",

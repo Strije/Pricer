@@ -58,11 +58,14 @@ def test_brand_votes_like_desktop(runs):
 
 
 def test_auto_choice_uses_mentions(runs):
-    # 162622 — ZIC с явным перевесом; W71295 — MANN только благодаря упоминаниям в названиях;
+    # 162622 — ZIC с явным перевесом; W71295 — MANN (7 голосов против 4 у Redskin — берём сами);
     # OC90 — MAHLE и AM POINT почти поровну: спрашиваем пользователя.
     assert runs["162622"][2]["brand"] == "ZIC"
     assert runs["W71295"][2]["brand"] == "MANN" and runs["W71295"][1][0]["mentions"] >= 1
     assert runs["OC90"][2] is None
+    # и без упоминаний MANN берётся: перевес 1,5 раза, а не вдвое
+    w = runs["W71295"][1]
+    assert choose_brand([{**c, "score": c["votes"]} for c in w], w[0]["providers"] + w[1]["providers"])["brand"] == "MANN"
 
 
 def test_offers_like_desktop(runs):

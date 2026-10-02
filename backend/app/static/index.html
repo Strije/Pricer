@@ -409,6 +409,17 @@
     </div>
   </section>
   <section id="tab-suppliers" class="hidden">
+    <details class="panel" id="search-settings"><summary><strong>Настройки поиска</strong> <span class="note">автовыбор бренда</span></summary>
+      <div class="row" style="margin-top:10px">
+        <label>Бренд выбирается сам, если его назвали не меньше, % ответивших
+          <input type="number" id="ss-share" min="0" max="100" step="5" style="width:90px"></label>
+        <label>и чаще второго варианта, раз
+          <input type="number" id="ss-lead" min="1" max="10" step="0.1" style="width:90px"></label>
+        <button class="secondary" id="ss-save">Сохранить</button><span class="msg" id="ss-msg"></span>
+      </div>
+      <div class="note">Иначе поиск предложит выбрать бренд. Голоса — сколько поставщиков назвали бренд для артикула;
+        упоминание бренда в названиях других вариантов («ан. MAHLE OC90») считается ещё одним голосом.</div>
+    </details>
     <div class="panel">
       <div class="row">
         <strong>Импорт из десктопной программы</strong>
@@ -1011,6 +1022,22 @@ async function loadVinDetails(params) {
     });
   } catch (err) { $("vin-details").textContent = err.message; }
 }
+async function loadSearchSettings() {
+  try {
+    const st = await api("/api/org/settings");
+    $("ss-share").value = Math.round(100 * (st.brand_auto_share ?? 0.5));
+    $("ss-lead").value = st.brand_auto_lead ?? 1.5;
+  } catch (e) {}
+}
+$("search-settings").addEventListener("toggle", () => { if ($("search-settings").open) loadSearchSettings(); });
+$("ss-save").onclick = async () => {
+  const share = Number($("ss-share").value) / 100, lead = Number($("ss-lead").value);
+  if (!(share >= 0 && share <= 1) || !(lead >= 1)) { $("ss-msg").textContent = "Доля — от 0 до 100 %, перевес — от 1"; return; }
+  try {
+    await api("/api/org/settings", {method: "PUT", body: {brand_auto_share: share, brand_auto_lead: lead}});
+    $("ss-msg").className = "msg ok"; $("ss-msg").textContent = "Сохранено";
+  } catch (err) { $("ss-msg").className = "msg"; $("ss-msg").textContent = err.message; }
+};
 </script>
 <script src="/static/search.js"></script>
 </body>
