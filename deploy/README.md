@@ -5,13 +5,16 @@ VPN-подписка) и их не трогает: свой пользовате
 свой сайт nginx, порт 8095 только на 127.0.0.1.
 
 ## 1. Адрес
-В DNS домена добавьте запись **A**: `pricer.avtodrug92.ru → IP сервера` (имя — любое ваше).
-Подождите, пока запись начнёт отвечать (обычно 5–30 минут): `ping pricer.avtodrug92.ru`.
+Свой домен не обязателен. Если адрес не указать, скрипт возьмёт технический адрес сервера у хостинга
+(как у API Автодруга, вида `9077635-oy742028.twc1.net`), а если его нет — бесплатное имя
+`109-73-199-217.sslip.io` (сервис sslip.io сам указывает его на ваш IP). Сертификат HTTPS выпускается
+и на такие адреса. Позже можно перейти на свой адрес (например, `pricer.avtodrug92.ru`, запись **A**
+в DNS → IP сервера): `bash pricer-setup.sh install pricer.avtodrug92.ru` ещё раз.
 
 ## 2. Установка (от root на сервере)
 ```
 curl -fsSLo pricer-setup.sh https://raw.githubusercontent.com/Strije/Pricer/claude/price-web-migration-plan-fmsod0/deploy/setup.sh
-bash pricer-setup.sh install pricer.avtodrug92.ru ваш@email
+bash pricer-setup.sh install ваш@email
 bash pricer-setup.sh create-org "Автодруг" ваш@email
 ```
 Вторая команда печатает пароль администратора — один раз. Войдите на https://pricer.avtodrug92.ru,

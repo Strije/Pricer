@@ -4,12 +4,14 @@
 # Запускать от root:
 #
 #   curl -fsSLo pricer-setup.sh https://raw.githubusercontent.com/Strije/Pricer/claude/price-web-migration-plan-fmsod0/deploy/setup.sh
-#   bash pricer-setup.sh install pricer.avtodrug92.ru you@mail.ru   # 1) всё поставить и включить HTTPS
+#   bash pricer-setup.sh install [адрес] [email]                   # 1) всё поставить и включить HTTPS
+#        адрес — свой домен (pricer.avtodrug92.ru); без него — технический адрес сервера
+#        у хостинга или бесплатное имя вида 109-73-199-217.sslip.io
 #   bash pricer-setup.sh create-org "Автодруг" you@mail.ru          # 2) организация и администратор
 #   bash pricer-setup.sh update                                     # потом: свежий код из git
 #   bash pricer-setup.sh backup | restore ФАЙЛ | status
 #
-# Адрес (домен) должен уже указывать на этот сервер (DNS, запись A), иначе сертификат не выпустится.
+# Свой домен должен уже указывать на этот сервер (DNS, запись A), иначе сертификат не выпустится.
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/Strije/Pricer.git}"
@@ -69,8 +71,10 @@ deploy_code() {
 }
 
 cmd_install() {
-    local domain="${1:-}" email="${2:-}"
-    [ -n "$domain" ] && [ -n "$email" ] || die "использование: install ДОМЕН EMAIL (email — для писем Let's Encrypt)"
+    local domain="" email="" arg
+    for arg in "$@"; do  # порядок любой: адрес и/или email (письма Let's Encrypt о сертификате)
+        case "$arg" in *@*) email="$arg" ;; *) domain="$arg" ;; esac
+    done
     [ "$(id -u)" = 0 ] || die "запускать от root"
 
     say "Пакеты"
@@ -79,9 +83,20 @@ cmd_install() {
         python3-certbot-nginx postgresql >/dev/null
     ok "Python для сервиса: $(pick_python), PostgreSQL, nginx, certbot"
 
-    say "Адрес $domain"
+    say "Адрес"
     local here there
-    here=$(curl -fsS -4 -m 10 https://ifconfig.me 2>/dev/null || true)
+    here=$(curl -fsS -4 -m 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    if [ -z "$domain" ]; then
+        # своего домена нет: технический адрес сервера у хостинга (обратная запись DNS, как у API
+        # Автодруга), а если его нет — бесплатное имя sslip.io, которое само указывает на этот IP
+        domain=$(getent hosts "$here" | awk '{print $2}' | grep '\.' | grep -v '^localhost' | head -1 || true)
+        if [ -n "$domain" ] && [ "$(getent ahostsv4 "$domain" | awk 'NR==1{print $1}')" = "$here" ]; then
+            ok "технический адрес сервера: $domain"
+        else
+            domain="${here//./-}.sslip.io"
+            ok "свой адрес не задан — используем $domain (бесплатное имя для IP $here)"
+        fi
+    fi
     there=$(getent ahostsv4 "$domain" | awk 'NR==1{print $1}' || true)
     if [ "${SKIP_DNS_CHECK:-0}" = 1 ]; then ok "проверка DNS пропущена (SKIP_DNS_CHECK=1)"
     elif [ -n "$there" ] && [ "$here" = "$there" ]; then ok "$domain → $there (этот сервер)"
@@ -129,13 +144,14 @@ cmd_install() {
     sed "s/__DOMAIN__/$domain/" "$DIR/deploy/nginx-pricer.conf" > "$SITE"
     ln -sf "$SITE" /etc/nginx/sites-enabled/pricer
     nginx -t -q && systemctl reload nginx
-    certbot --nginx -n --agree-tos -m "$email" -d "$domain" --redirect >/dev/null
+    if [ -n "$email" ]; then certbot --nginx -n --agree-tos -m "$email" -d "$domain" --redirect >/dev/null
+    else certbot --nginx -n --agree-tos --register-unsafely-without-email -d "$domain" --redirect >/dev/null; fi
     ok "https://$domain (сертификат Let's Encrypt продлевается сам)"
 
     say "Запуск"
     systemctl enable -q --now pricer pricer-watchdog.timer
     health
-    say "Готово. Дальше: bash $0 create-org \"Название\" $email"
+    say "Готово: https://$domain — дальше: bash $0 create-org \"Название\" ВАШ@EMAIL"
 }
 
 cmd_update() {
