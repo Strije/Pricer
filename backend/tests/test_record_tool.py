@@ -80,3 +80,25 @@ def test_ordering_is_blocked():
         pass
     else:
         raise AssertionError("корзина должна быть заблокирована")
+
+
+def test_masks_derived_credentials_by_parameter_name():
+    url = ("https://abstd.example/api-search?article=162622&agreement_id=31663&auth=e61a1090abcdef"
+           "&brand=ZIC")
+    assert tool.mask_params(url).endswith("agreement_id=31663&auth=***&brand=ZIC")
+    url = "https://x.example/search/articles?userlogin=api@id1&userpsw=e9dffc24&number=162622"
+    assert tool.mask_params(url) == "https://x.example/search/articles?userlogin=***&userpsw=***&number=162622"
+    assert tool.mask_params("ClientID=1&Password=abc&Code=W71295") == "ClientID=***&Password=***&Code=W71295"
+    assert tool.mask_params('{"user_login": "u", "user_password": "p", "brand": "ZIC"}') == (
+        '{"user_login": "***", "user_password": "***", "brand": "ZIC"}'
+    )
+    assert tool.mask_params("<KEY1>abc</KEY1><text>W71295</text>") == "<KEY1>***</KEY1><text>W71295</text>"
+    # Обычные поля с похожими именами не трогаем
+    assert tool.mask_params("?brand_key=MANN&article=1") == "?brand_key=MANN&article=1"
+
+
+def test_md5_of_password_is_treated_as_secret():
+    import hashlib
+
+    secrets = tool.collect_secrets(SETTINGS)
+    assert hashlib.md5(b"Pa$$/word1").hexdigest() in secrets

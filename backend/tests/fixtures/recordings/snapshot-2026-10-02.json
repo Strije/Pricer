@@ -1,0 +1,1391 @@
+{
+ "AIRLINE:AHR12D01:ABSTD": {
+  "cheapest": [
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 7,
+    "is_cross": 0,
+    "price": 720.0,
+    "quantity": "21",
+    "warehouse": "MSK 647"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 5,
+    "is_cross": 0,
+    "price": 739.0,
+    "quantity": "30",
+    "warehouse": "MSK 66"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 4,
+    "is_cross": 0,
+    "price": 739.0,
+    "quantity": "4",
+    "warehouse": "RND 1133"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 6,
+    "is_cross": 0,
+    "price": 774.0,
+    "quantity": "33",
+    "warehouse": "MSK 670"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 4,
+    "is_cross": 0,
+    "price": 781.0,
+    "quantity": "33",
+    "warehouse": "KRD 1146"
+   }
+  ],
+  "count": 15,
+  "exact": 15
+ },
+ "AIRLINE:AHR12D01:Armtek": {
+  "cheapest": [
+   {
+    "article": "43304",
+    "brand": "AVS",
+    "days": 10,
+    "price": 198.36,
+    "quantity": "194"
+   },
+   {
+    "article": "20372101",
+    "brand": "PRC",
+    "days": 4,
+    "price": 205.17,
+    "quantity": "39"
+   },
+   {
+    "article": "20.3721010",
+    "brand": "PRC",
+    "days": 6,
+    "price": 207.36,
+    "quantity": "57"
+   },
+   {
+    "article": "43304",
+    "brand": "AVS",
+    "days": 10,
+    "price": 223.92,
+    "quantity": "100"
+   },
+   {
+    "article": "20.3721-01",
+    "brand": "РФ",
+    "days": 10,
+    "price": 234.62,
+    "quantity": "2"
+   }
+  ],
+  "count": 1000,
+  "exact": 4
+ },
+ "AIRLINE:AHR12D01:Avtoto": {
+  "cheapest": [
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 4,
+    "is_cross": false,
+    "price": 678.0,
+    "quantity": "33",
+    "supplier_offer_id": "111",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 4,
+    "is_cross": false,
+    "price": 681.0,
+    "quantity": "1",
+    "supplier_offer_id": "115",
+    "warehouse": "Краснодар"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 4,
+    "is_cross": false,
+    "price": 681.0,
+    "quantity": "16",
+    "supplier_offer_id": "114",
+    "warehouse": "Ростов"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 7,
+    "is_cross": false,
+    "price": 713.0,
+    "quantity": "21",
+    "supplier_offer_id": "127",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 7,
+    "is_cross": false,
+    "price": 713.0,
+    "quantity": "23",
+    "supplier_offer_id": "128",
+    "warehouse": "Москва"
+   }
+  ],
+  "count": 214,
+  "exact": 214
+ },
+ "AIRLINE:AHR12D01:Forum-Auto": {
+  "cheapest": [
+   {
+    "article": "99510002402",
+    "brand": "DPA",
+    "days": 3,
+    "is_cross": true,
+    "price": 358.0,
+    "quantity": "27",
+    "warehouse": "MSK"
+   },
+   {
+    "article": "99510003202",
+    "brand": "DPA",
+    "days": 1,
+    "is_cross": true,
+    "price": 396.0,
+    "quantity": "1",
+    "warehouse": "CRI"
+   },
+   {
+    "article": "99510003202",
+    "brand": "DPA",
+    "days": 3,
+    "is_cross": true,
+    "price": 443.7,
+    "quantity": "30",
+    "warehouse": "MSK"
+   },
+   {
+    "article": "99510003202",
+    "brand": "DPA",
+    "days": 1,
+    "is_cross": true,
+    "price": 443.7,
+    "quantity": "2",
+    "warehouse": "RST"
+   },
+   {
+    "article": "99510002702",
+    "brand": "DPA",
+    "days": 3,
+    "is_cross": true,
+    "price": 451.0,
+    "quantity": "4",
+    "warehouse": "MSK"
+   }
+  ],
+  "count": 55,
+  "exact": 2
+ },
+ "AIRLINE:AHR12D01:Mikado": {
+  "cheapest": [
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 0,
+    "is_cross": false,
+    "price": 741.15,
+    "quantity": "1",
+    "warehouse": "Джанкой"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 3,
+    "is_cross": false,
+    "price": 741.15,
+    "quantity": "1",
+    "warehouse": "Крр Запад"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 2,
+    "is_cross": false,
+    "price": 741.15,
+    "quantity": "1",
+    "warehouse": "Мелитополь"
+   }
+  ],
+  "count": 3,
+  "exact": 3
+ },
+ "AIRLINE:AHR12D01:Profit-League": {
+  "cheapest": [
+   {
+    "article": "AHR12R02",
+    "brand": "AIRLINE",
+    "days": 1,
+    "delivery_hours": 24,
+    "delivery_total_hours": 24,
+    "is_cross": true,
+    "price": 616.1,
+    "quantity": "7",
+    "warehouse": "Краснодар"
+   },
+   {
+    "article": "AHR12R02",
+    "brand": "AIRLINE",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": true,
+    "price": 616.1,
+    "quantity": "31",
+    "warehouse": "Ростов 1 (Батайск)"
+   },
+   {
+    "article": "AHR12R02",
+    "brand": "AIRLINE",
+    "days": 4,
+    "delivery_hours": 74,
+    "delivery_total_hours": 74,
+    "is_cross": true,
+    "price": 616.1,
+    "quantity": "8",
+    "warehouse": "Ростов 2 (хут.Ленина)"
+   },
+   {
+    "article": "AHR12R02",
+    "brand": "AIRLINE",
+    "days": 0,
+    "delivery_hours": 0,
+    "delivery_total_hours": 0,
+    "is_cross": true,
+    "price": 616.1,
+    "quantity": "2",
+    "warehouse": "Симферополь"
+   },
+   {
+    "article": "AHR12D01",
+    "brand": "AIRLINE",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": false,
+    "price": 741.15,
+    "quantity": "25",
+    "warehouse": "Ростов 1 (Батайск)"
+   }
+  ],
+  "count": 10,
+  "exact": 3
+ },
+ "AIRLINE:AHR12D01:Rossko": {
+  "cheapest": [
+   {
+    "article": "C313",
+    "brand": "ИМПУЛЬС",
+    "days": 8,
+    "is_cross": true,
+    "price": 333.0,
+    "quantity": "6",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "21063721020",
+    "brand": "Соатэ",
+    "days": 8,
+    "is_cross": true,
+    "price": 504.0,
+    "quantity": "53",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "21063721020",
+    "brand": "Соатэ",
+    "days": 10,
+    "is_cross": true,
+    "price": 505.0,
+    "quantity": "76",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "2106372102003",
+    "brand": "Соатэ",
+    "days": 9,
+    "is_cross": true,
+    "price": 510.0,
+    "quantity": "8",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "21063721020",
+    "brand": "Соатэ",
+    "days": 11,
+    "is_cross": true,
+    "price": 527.0,
+    "quantity": "38",
+    "warehouse": "Партнерский склад"
+   }
+  ],
+  "count": 187,
+  "exact": 5
+ },
+ "AIRLINE:AHR12D01:TISS": {
+  "cheapest": [],
+  "count": 0,
+  "exact": 0
+ },
+ "AIRLINE:AHR12D01:Автоформула": {
+  "cheapest": [
+   {
+    "article": "C313",
+    "brand": "ИМПУЛЬС",
+    "days": 8,
+    "is_cross": true,
+    "price": 284.0,
+    "quantity": "6",
+    "warehouse": "Москва NBLM"
+   },
+   {
+    "article": "C313",
+    "brand": "ИМПУЛЬС",
+    "days": 10,
+    "is_cross": true,
+    "price": 305.0,
+    "quantity": "9",
+    "warehouse": "Москва EKOE"
+   },
+   {
+    "article": "C313",
+    "brand": "ИМПУЛЬС",
+    "days": 11,
+    "is_cross": true,
+    "price": 311.0,
+    "quantity": "6",
+    "warehouse": "Москва LKNF"
+   },
+   {
+    "article": "C313",
+    "brand": "ИМПУЛЬС",
+    "days": 8,
+    "is_cross": true,
+    "price": 339.0,
+    "quantity": "6",
+    "warehouse": "Москва+ UHAM"
+   },
+   {
+    "article": "1033C",
+    "brand": "AUTO-GUR",
+    "days": 7,
+    "is_cross": true,
+    "price": 413.0,
+    "quantity": "3",
+    "warehouse": "Москва UEHF"
+   }
+  ],
+  "count": 1548,
+  "exact": 45
+ },
+ "AIRLINE:AHR12D01:Фаворит": {
+  "cheapest": [
+   {
+    "article": "99510002402",
+    "brand": "DIAMOND",
+    "days": 2,
+    "is_cross": true,
+    "price": 389.55,
+    "quantity": "1",
+    "warehouse": "ВРН"
+   },
+   {
+    "article": "99510002402",
+    "brand": "DIAMOND",
+    "days": 2,
+    "is_cross": true,
+    "price": 389.55,
+    "quantity": "5",
+    "warehouse": "ДМД"
+   },
+   {
+    "article": "99510002402",
+    "brand": "DIAMOND",
+    "days": 2,
+    "is_cross": true,
+    "price": 389.55,
+    "quantity": "10",
+    "warehouse": "МСК РС"
+   },
+   {
+    "article": "99510002402",
+    "brand": "DIAMOND",
+    "days": 3,
+    "is_cross": true,
+    "price": 404.09,
+    "quantity": "10",
+    "warehouse": "МСК РС"
+   },
+   {
+    "article": "99510002402",
+    "brand": "DIAMOND",
+    "days": 6,
+    "is_cross": true,
+    "price": 404.09,
+    "quantity": "6",
+    "warehouse": "МСК РС"
+   }
+  ],
+  "count": 508,
+  "exact": 48
+ },
+ "MANN:W712/95:ABSTD": {
+  "cheapest": [
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 4,
+    "is_cross": 0,
+    "price": 458.0,
+    "quantity": "169",
+    "warehouse": "RND 1139"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 5,
+    "is_cross": 0,
+    "price": 476.0,
+    "quantity": "318",
+    "warehouse": "RND 668"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 5,
+    "is_cross": 0,
+    "price": 486.0,
+    "quantity": "455",
+    "warehouse": "MSK 1103"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 5,
+    "is_cross": 0,
+    "price": 550.0,
+    "quantity": "173",
+    "warehouse": "RND 758"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 6,
+    "is_cross": 0,
+    "price": 564.0,
+    "quantity": "526",
+    "warehouse": "MSK 661"
+   }
+  ],
+  "count": 14,
+  "exact": 14
+ },
+ "MANN:W712/95:Armtek": {
+  "cheapest": [
+   {
+    "article": "BR.F.2.12",
+    "brand": "BRAVE",
+    "days": 3,
+    "price": 131.83,
+    "quantity": "10"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "BRAVE",
+    "days": 3,
+    "price": 131.83,
+    "quantity": "25"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "BRAVE",
+    "days": 6,
+    "price": 142.0,
+    "quantity": "320"
+   },
+   {
+    "article": "TBA1022",
+    "brand": "TATSUMI",
+    "days": 3,
+    "price": 151.32,
+    "quantity": "1"
+   },
+   {
+    "article": "SP-1034",
+    "brand": "SUFIX",
+    "days": 7,
+    "price": 155.0,
+    "quantity": "1993"
+   }
+  ],
+  "count": 529,
+  "exact": 8
+ },
+ "MANN:W712/95:Avtoto": {
+  "cheapest": [
+   {
+    "article": "W71295",
+    "brand": "REDSKIN",
+    "days": 5,
+    "is_cross": false,
+    "price": 222.0,
+    "quantity": "9",
+    "supplier_offer_id": "550",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "W71295",
+    "brand": "REDSKIN",
+    "days": 7,
+    "is_cross": false,
+    "price": 247.0,
+    "quantity": "345",
+    "supplier_offer_id": "730",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "W71295",
+    "brand": "REDSKIN",
+    "days": 12,
+    "is_cross": false,
+    "price": 250.0,
+    "quantity": "441",
+    "supplier_offer_id": "736",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "W71295",
+    "brand": "REDSKIN",
+    "days": 12,
+    "is_cross": false,
+    "price": 257.0,
+    "quantity": "441",
+    "supplier_offer_id": "770",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "W71295",
+    "brand": "REDSKIN",
+    "days": 13,
+    "is_cross": false,
+    "price": 276.0,
+    "quantity": "345",
+    "supplier_offer_id": "834",
+    "warehouse": "Москва"
+   }
+  ],
+  "count": 279,
+  "exact": 279
+ },
+ "MANN:W712/95:Forum-Auto": {
+  "cheapest": [
+   {
+    "article": "FO6312",
+    "brand": "BM",
+    "days": 1,
+    "is_cross": true,
+    "price": 112.7,
+    "quantity": "1",
+    "warehouse": "CRI"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "BRAVE",
+    "days": 3,
+    "is_cross": true,
+    "price": 133.5,
+    "quantity": "50",
+    "warehouse": "MSK"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "BRAVE",
+    "days": 1,
+    "is_cross": true,
+    "price": 133.5,
+    "quantity": "1",
+    "warehouse": "RST"
+   },
+   {
+    "article": "LCV712/95W",
+    "brand": "LIVCAR",
+    "days": 3,
+    "is_cross": true,
+    "price": 143.6,
+    "quantity": "50",
+    "warehouse": "MSK"
+   },
+   {
+    "article": "GIR01008",
+    "brand": "GANZ",
+    "days": 1,
+    "is_cross": true,
+    "price": 152.0,
+    "quantity": "5",
+    "warehouse": "CRI"
+   }
+  ],
+  "count": 116,
+  "exact": 8
+ },
+ "MANN:W712/95:Mikado": {
+  "cheapest": [
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 3,
+    "is_cross": false,
+    "price": 676.5,
+    "quantity": "1",
+    "warehouse": "Анапа"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 4,
+    "is_cross": false,
+    "price": 676.5,
+    "quantity": "1",
+    "warehouse": "Астрахань"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 3,
+    "is_cross": false,
+    "price": 676.5,
+    "quantity": "1",
+    "warehouse": "Волгоград"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 2,
+    "is_cross": false,
+    "price": 676.5,
+    "quantity": "2",
+    "warehouse": "Мелитополь"
+   },
+   {
+    "article": "W71295",
+    "brand": "MANN-FILTER",
+    "days": 3,
+    "is_cross": false,
+    "price": 676.5,
+    "quantity": "1",
+    "warehouse": "Новороссийск"
+   }
+  ],
+  "count": 11,
+  "exact": 11
+ },
+ "MANN:W712/95:Profit-League": {
+  "cheapest": [
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": true,
+    "price": 104.3,
+    "quantity": "1",
+    "warehouse": "Ростов 1 (Батайск)"
+   },
+   {
+    "article": "D09107201",
+    "brand": "FREY",
+    "days": 0,
+    "delivery_hours": 0,
+    "delivery_total_hours": 0,
+    "is_cross": true,
+    "price": 126.14,
+    "quantity": "7",
+    "warehouse": "Симферополь"
+   },
+   {
+    "article": "BRF212",
+    "brand": "BRAVE",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": true,
+    "price": 137.44,
+    "quantity": "2",
+    "warehouse": "Ростов 1 (Батайск)"
+   },
+   {
+    "article": "BRF212",
+    "brand": "BRAVE",
+    "days": 4,
+    "delivery_hours": 74,
+    "delivery_total_hours": 74,
+    "is_cross": true,
+    "price": 137.44,
+    "quantity": "3",
+    "warehouse": "Ростов 2 (хут.Ленина)"
+   },
+   {
+    "article": "BRF212",
+    "brand": "BRAVE",
+    "days": 0,
+    "delivery_hours": 0,
+    "delivery_total_hours": 0,
+    "is_cross": true,
+    "price": 137.44,
+    "quantity": "1",
+    "warehouse": "Симферополь"
+   }
+  ],
+  "count": 68,
+  "exact": 4
+ },
+ "MANN:W712/95:Rossko": {
+  "cheapest": [
+   {
+    "article": "BSG90-140-025",
+    "brand": "BSG",
+    "days": 4,
+    "is_cross": true,
+    "price": 115.0,
+    "quantity": "41",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "Brave",
+    "days": 1,
+    "is_cross": true,
+    "price": 142.0,
+    "quantity": "57",
+    "warehouse": "Краснодар"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "Brave",
+    "days": 3,
+    "is_cross": true,
+    "price": 142.0,
+    "quantity": "34",
+    "warehouse": "Краснодар"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "Brave",
+    "days": 5,
+    "is_cross": true,
+    "price": 142.0,
+    "quantity": "746",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "BR.F.2.12",
+    "brand": "Brave",
+    "days": 0,
+    "is_cross": true,
+    "price": 142.0,
+    "quantity": "3",
+    "warehouse": "Севастополь, Отрадная улица, 17/1"
+   }
+  ],
+  "count": 250,
+  "exact": 5
+ },
+ "MANN:W712/95:TISS": {
+  "cheapest": [
+   {
+    "article": "JFM0093",
+    "brand": "JD",
+    "days": 4,
+    "is_cross": true,
+    "price": 191.05,
+    "quantity": "10",
+    "warehouse": "Краснодар,п.Индустриальный, Восточная 1б"
+   },
+   {
+    "article": "JFM0093",
+    "brand": "JD",
+    "days": 6,
+    "is_cross": true,
+    "price": 191.05,
+    "quantity": "200",
+    "warehouse": "Москва, Балашиха, пр. Ленина 65."
+   },
+   {
+    "article": "JFM0093",
+    "brand": "JD",
+    "days": 3,
+    "is_cross": true,
+    "price": 191.05,
+    "quantity": "50",
+    "warehouse": "Ростов-На-Дону, Благодатная д.271"
+   },
+   {
+    "article": "JFM0093",
+    "brand": "JD",
+    "days": 0,
+    "is_cross": true,
+    "price": 191.05,
+    "quantity": "200",
+    "warehouse": "Симферополь, Крылова 160"
+   },
+   {
+    "article": "GB123",
+    "brand": "BIG FILTER",
+    "days": 4,
+    "is_cross": true,
+    "price": 348.0,
+    "quantity": "1",
+    "warehouse": "Краснодар,п.Индустриальный, Восточная 1б"
+   }
+  ],
+  "count": 10,
+  "exact": 0
+ },
+ "MANN:W712/95:Автоформула": {
+  "cheapest": [
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 8,
+    "is_cross": true,
+    "price": 110.0,
+    "quantity": "1486",
+    "warehouse": "Москва BIOP"
+   },
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 3,
+    "is_cross": true,
+    "price": 117.0,
+    "quantity": "1",
+    "warehouse": "Россия FGHJ"
+   },
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 3,
+    "is_cross": true,
+    "price": 117.0,
+    "quantity": "3",
+    "warehouse": "Россия GHKB"
+   },
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 6,
+    "is_cross": true,
+    "price": 117.0,
+    "quantity": "3",
+    "warehouse": "Ростов YGUN"
+   },
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 3,
+    "is_cross": true,
+    "price": 123.0,
+    "quantity": "1",
+    "warehouse": "Краснодар CASK"
+   }
+  ],
+  "count": 1750,
+  "exact": 48
+ },
+ "MANN:W712/95:Фаворит": {
+  "cheapest": [
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 5,
+    "is_cross": true,
+    "price": 121.2,
+    "quantity": "1",
+    "warehouse": "КРН РС"
+   },
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 5,
+    "is_cross": true,
+    "price": 121.2,
+    "quantity": "3",
+    "warehouse": "МСК РС"
+   },
+   {
+    "article": "C401010210",
+    "brand": "CAREADY",
+    "days": 2,
+    "is_cross": true,
+    "price": 121.2,
+    "quantity": "3",
+    "warehouse": "РНД РС"
+   },
+   {
+    "article": "BSG90-140-025",
+    "brand": "BSG",
+    "days": 2,
+    "is_cross": true,
+    "price": 134.0,
+    "quantity": "1",
+    "warehouse": "ВРН"
+   },
+   {
+    "article": "BSG90-140-025",
+    "brand": "BSG",
+    "days": 2,
+    "is_cross": true,
+    "price": 134.0,
+    "quantity": "48",
+    "warehouse": "ДМД"
+   }
+  ],
+  "count": 1892,
+  "exact": 58
+ },
+ "ZIC:162622:ABSTD": {
+  "cheapest": [
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 5,
+    "is_cross": 0,
+    "price": 1863.0,
+    "quantity": "120",
+    "warehouse": "KRD 310"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 5,
+    "is_cross": 0,
+    "price": 1900.0,
+    "quantity": "500",
+    "warehouse": "MSK 1105"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 5,
+    "is_cross": 0,
+    "price": 1934.0,
+    "quantity": "84",
+    "warehouse": "MSK 397"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 4,
+    "is_cross": 0,
+    "price": 2003.0,
+    "quantity": "4",
+    "warehouse": "KRD 767"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 5,
+    "is_cross": 0,
+    "price": 2003.0,
+    "quantity": "4",
+    "warehouse": "PTG 916"
+   }
+  ],
+  "count": 12,
+  "exact": 12
+ },
+ "ZIC:162622:Armtek": {
+  "cheapest": [
+   {
+    "article": "10W40FR012",
+    "brand": "FURO",
+    "days": 3,
+    "price": 316.76,
+    "quantity": "7"
+   },
+   {
+    "article": "10W40FR012",
+    "brand": "FURO",
+    "days": 3,
+    "price": 316.76,
+    "quantity": "13"
+   },
+   {
+    "article": "10W40FR012",
+    "brand": "FURO",
+    "days": 4,
+    "price": 319.93,
+    "quantity": "14"
+   },
+   {
+    "article": "19191",
+    "brand": "LUKOIL",
+    "days": 4,
+    "price": 331.03,
+    "quantity": "92"
+   },
+   {
+    "article": "600239",
+    "brand": "SINTEC",
+    "days": 3,
+    "price": 360.16,
+    "quantity": "0"
+   }
+  ],
+  "count": 1000,
+  "exact": 3
+ },
+ "ZIC:162622:Avtoto": {
+  "cheapest": [
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 6,
+    "is_cross": false,
+    "price": 1954.0,
+    "quantity": "7",
+    "supplier_offer_id": "146",
+    "warehouse": "Краснодар"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 4,
+    "is_cross": false,
+    "price": 1954.0,
+    "quantity": "7",
+    "supplier_offer_id": "138",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 4,
+    "is_cross": false,
+    "price": 1954.0,
+    "quantity": "10",
+    "supplier_offer_id": "139",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 5,
+    "is_cross": false,
+    "price": 1954.0,
+    "quantity": "121",
+    "supplier_offer_id": "140",
+    "warehouse": "Москва"
+   },
+   {
+    "article": "162622",
+    "brand": "ZIC",
+    "days": 5,
+    "is_cross": false,
+    "price": 1954.0,
+    "quantity": "67",
+    "supplier_offer_id": "141",
+    "warehouse": "Москва"
+   }
+  ],
+  "count": 178,
+  "exact": 178
+ },
+ "ZIC:162622:Forum-Auto": {
+  "cheapest": [
+   {
+    "article": "GGXH116",
+    "brand": "ONNURI",
+    "days": 6,
+    "is_cross": true,
+    "price": 86.9,
+    "quantity": "4",
+    "warehouse": "MSK-CD"
+   },
+   {
+    "article": "GGXH116",
+    "brand": "ONNURI",
+    "days": 5,
+    "is_cross": true,
+    "price": 174.0,
+    "quantity": "20",
+    "warehouse": "MSK-CD"
+   },
+   {
+    "article": "GGXH116",
+    "brand": "ONNURI",
+    "days": 8,
+    "is_cross": true,
+    "price": 223.8,
+    "quantity": "20",
+    "warehouse": "MSK-CD"
+   },
+   {
+    "article": "410000113",
+    "brand": "FELIX",
+    "days": 3,
+    "is_cross": true,
+    "price": 492.0,
+    "quantity": "6",
+    "warehouse": "MSK"
+   },
+   {
+    "article": "2852137104",
+    "brand": "HYUNDAI/KIA",
+    "days": 3,
+    "is_cross": true,
+    "price": 649.5,
+    "quantity": "18",
+    "warehouse": "MSK"
+   }
+  ],
+  "count": 64,
+  "exact": 1
+ },
+ "ZIC:162622:Mikado": {
+  "cheapest": [],
+  "count": 0,
+  "exact": 0
+ },
+ "ZIC:162622:Profit-League": {
+  "cheapest": [
+   {
+    "article": "132622",
+    "brand": "ZIC",
+    "days": 1,
+    "delivery_hours": 24,
+    "delivery_total_hours": 24,
+    "is_cross": true,
+    "price": 683.71,
+    "quantity": "11",
+    "warehouse": "Краснодар"
+   },
+   {
+    "article": "132622",
+    "brand": "ZIC",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": true,
+    "price": 683.71,
+    "quantity": "16",
+    "warehouse": "Ростов 1 (Батайск)"
+   },
+   {
+    "article": "132622",
+    "brand": "ZIC",
+    "days": 4,
+    "delivery_hours": 74,
+    "delivery_total_hours": 74,
+    "is_cross": true,
+    "price": 683.71,
+    "quantity": "102",
+    "warehouse": "Ростов 2 (хут.Ленина)"
+   },
+   {
+    "article": "KS00041",
+    "brand": "KORSON",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": true,
+    "price": 856.0,
+    "quantity": "8",
+    "warehouse": "Ростов 1 (Батайск)"
+   },
+   {
+    "article": "10W40H11",
+    "brand": "HITATSU",
+    "days": 2,
+    "delivery_hours": 48,
+    "delivery_total_hours": 48,
+    "is_cross": true,
+    "price": 886.0,
+    "quantity": "47",
+    "warehouse": "Ростов 1 (Батайск)"
+   }
+  ],
+  "count": 46,
+  "exact": 3
+ },
+ "ZIC:162622:Rossko": {
+  "cheapest": [
+   {
+    "article": "3705307",
+    "brand": "Лукойл",
+    "days": 10,
+    "is_cross": true,
+    "price": 455.0,
+    "quantity": "100",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "3705307",
+    "brand": "Лукойл",
+    "days": 8,
+    "is_cross": true,
+    "price": 476.0,
+    "quantity": "200",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "19187",
+    "brand": "Лукойл",
+    "days": 7,
+    "is_cross": true,
+    "price": 520.0,
+    "quantity": "37",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "3705307",
+    "brand": "Лукойл",
+    "days": 4,
+    "is_cross": true,
+    "price": 523.0,
+    "quantity": "4",
+    "warehouse": "Партнерский склад"
+   },
+   {
+    "article": "19187",
+    "brand": "Лукойл",
+    "days": 7,
+    "is_cross": true,
+    "price": 524.0,
+    "quantity": "1",
+    "warehouse": "Партнерский склад"
+   }
+  ],
+  "count": 128,
+  "exact": 3
+ },
+ "ZIC:162622:TISS": {
+  "cheapest": [
+   {
+    "article": "1112112001",
+    "brand": "RAVENOL",
+    "days": 4,
+    "is_cross": true,
+    "price": 1216.0,
+    "quantity": "1",
+    "warehouse": "Краснодар,п.Индустриальный, Восточная 1б"
+   },
+   {
+    "article": "1112112001",
+    "brand": "RAVENOL",
+    "days": 6,
+    "is_cross": true,
+    "price": 1216.0,
+    "quantity": "5",
+    "warehouse": "Москва, Балашиха, пр. Ленина 65."
+   },
+   {
+    "article": "1112112001",
+    "brand": "RAVENOL",
+    "days": 3,
+    "is_cross": true,
+    "price": 1216.0,
+    "quantity": "3",
+    "warehouse": "Ростов-На-Дону, Благодатная д.271"
+   },
+   {
+    "article": "1112112001",
+    "brand": "RAVENOL",
+    "days": 0,
+    "is_cross": true,
+    "price": 1216.0,
+    "quantity": "20",
+    "warehouse": "Симферополь, Крылова 160"
+   },
+   {
+    "article": "1112112004",
+    "brand": "RAVENOL",
+    "days": 4,
+    "is_cross": true,
+    "price": 4026.0,
+    "quantity": "2",
+    "warehouse": "Краснодар,п.Индустриальный, Восточная 1б"
+   }
+  ],
+  "count": 8,
+  "exact": 0
+ },
+ "ZIC:162622:Автоформула": {
+  "cheapest": [],
+  "count": 0,
+  "exact": 0
+ },
+ "ZIC:162622:Фаворит": {
+  "cheapest": [
+   {
+    "article": "4650229680475",
+    "brand": "Татнефть",
+    "days": 2,
+    "is_cross": true,
+    "price": 318.35,
+    "quantity": "200",
+    "warehouse": "ДМД"
+   },
+   {
+    "article": "4810446004168",
+    "brand": "Favorit",
+    "days": 5,
+    "is_cross": true,
+    "price": 319.48,
+    "quantity": "5",
+    "warehouse": "МСК РС"
+   },
+   {
+    "article": "2389901325",
+    "brand": "GAZPROMNEFT",
+    "days": 5,
+    "is_cross": true,
+    "price": 319.76,
+    "quantity": "100",
+    "warehouse": "КРН РС"
+   },
+   {
+    "article": "2389901325",
+    "brand": "GAZPROMNEFT",
+    "days": 6,
+    "is_cross": true,
+    "price": 322.39,
+    "quantity": "100",
+    "warehouse": "КРН РС"
+   },
+   {
+    "article": "2389901325",
+    "brand": "GAZPROMNEFT",
+    "days": 5,
+    "is_cross": true,
+    "price": 322.39,
+    "quantity": "100",
+    "warehouse": "РНД РС"
+   }
+  ],
+  "count": 2565,
+  "exact": 15
+ }
+}

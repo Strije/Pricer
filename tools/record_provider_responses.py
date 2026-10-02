@@ -15,6 +15,7 @@ settings.json заменяются на ***, заголовки Authorization и
 """
 import argparse
 import base64
+import hashlib
 import datetime
 import json
 import os
@@ -27,14 +28,31 @@ SECRET_KEY_RE = re.compile(r"(key|pass|login|user|token|secret|phone|client_id|a
 HIDDEN_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization"}
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MASK = "***"
+# Параметры, значение которых маскируется всегда, даже если его нет в settings.json:
+# поставщики передают производные от пароля хэши (ABSTD auth=, ABCP userpsw=).
+SECRET_PARAM = r"(?:auth\w*|userpsw|psw|pwd|pass\w*|password|secret|token|api_?key|apikey|key\d?|sign\w*|hash|session_?id|sid|login|userlogin|user(?:_?name|_?login|_?password)?|client_?id|developer_?key)"
+_QUERY_RE = re.compile(r"(?i)([?&;]" + SECRET_PARAM + r"=)([^&#\s\"']+)")
+_FORM_RE = re.compile(r"(?i)(^|&)(" + SECRET_PARAM + r"=)([^&\s]+)")
+_JSON_RE = re.compile(r'(?i)("' + SECRET_PARAM + r'"\s*:\s*")([^"]*)(")')
+_XML_RE = re.compile(r"(?i)(<(?:\w+:)?" + SECRET_PARAM + r"\b[^>]*>)([^<]*)(</)")
 
 
 def collect_secrets(settings):
-    """Все строковые значения секретных полей, плюс логин и пароль из ftp://user:pass@ адресов."""
-    found = set()
+    """Значения секретных полей из settings.json и их производные.
+
+    Производные: URL-кодированные варианты, хэши md5/sha1/sha256 и base64 от пары
+    «логин:пароль» (Basic-авторизация) — пары берутся только внутри настроек одного поставщика.
+    """
+    raw = set()
+    pairs = set()
 
     def walk(node, key=""):
         if isinstance(node, dict):
+            logins = [v for k, v in node.items() if isinstance(v, str) and re.search(r"(?i)login|user", k) and v.strip()]
+            passwords = [v for k, v in node.items() if isinstance(v, str) and re.search(r"(?i)pass", k) and v.strip()]
+            for login in logins:
+                for password in passwords:
+                    pairs.add((login.strip(), password.strip()))
             for k, v in node.items():
                 walk(v, str(k))
         elif isinstance(node, list):
@@ -42,29 +60,52 @@ def collect_secrets(settings):
                 walk(v, key)
         elif isinstance(node, str):
             if SECRET_KEY_RE.search(key) and len(node.strip()) >= 3:
-                found.add(node.strip())
+                raw.add(node.strip())
             for user, password in re.findall(r"//([^:/@\s]+):([^@/\s]+)@", node):
-                found.update({user, password})
+                raw.update({user, password})
+                pairs.add((user, password))
 
     walk(settings)
-    # В адресах и формах значения бывают URL-кодированы: маскируем и такие варианты.
-    for value in list(found):
+    found = set(raw)
+    for value in raw:
         found.update({quote(value, safe=""), quote_plus(value)})
-    # Basic-авторизация (Armtek и др.) кодирует логин и пароль в base64 — маскируем и такие строки.
-    plain = [s for s in found if "%" not in s]
-    for user in plain:
-        for password in plain:
-            if user != password:
-                found.add(base64.b64encode(f"{user}:{password}".encode()).decode())
+        for algo in ("md5", "sha1", "sha256"):
+            digest = hashlib.new(algo, value.encode("utf-8")).hexdigest()
+            found.update({digest, digest.upper()})
+    for user, password in pairs:
+        found.add(base64.b64encode(f"{user}:{password}".encode()).decode())
     return sorted(found, key=len, reverse=True)
+
+def mask_params(text):
+    """Маскирует значения секретных параметров по имени: в URL, форме, JSON и XML."""
+    if not text:
+        return text
+    text = _QUERY_RE.sub(lambda m: m.group(1) + MASK, text)
+    text = _FORM_RE.sub(lambda m: m.group(1) + m.group(2) + MASK, text)
+    text = _JSON_RE.sub(lambda m: m.group(1) + (MASK if m.group(2) else "") + m.group(3), text)
+    text = _XML_RE.sub(lambda m: m.group(1) + (MASK if m.group(2).strip() else m.group(2)) + m.group(3), text)
+    return text
+
+
+_MASK_CACHE = {}
+
+
+def _secret_pattern(secrets):
+    key = id(secrets), len(secrets)
+    pattern = _MASK_CACHE.get(key)
+    if pattern is None:
+        # Одно регулярное выражение вместо тысячи замен: длинные значения идут первыми.
+        ordered = sorted(set(secrets), key=len, reverse=True)
+        pattern = re.compile("|".join(re.escape(s) for s in ordered)) if ordered else None
+        _MASK_CACHE[key] = pattern
+    return pattern
 
 
 def mask(text, secrets):
     if not text:
         return text
-    for secret in secrets:
-        text = text.replace(secret, MASK)
-    return text
+    pattern = _secret_pattern(secrets)
+    return pattern.sub(MASK, text) if pattern else text
 
 
 def _decode(content):
@@ -112,9 +153,9 @@ class Recorder:
             "ts": datetime.datetime.now().isoformat(timespec="seconds"),
             "thread": threading.current_thread().name,
             "method": request.method,
-            "url": request.url,
+            "url": mask_params(request.url),
             "request_headers": {k: v for k, v in request.headers.items() if k.lower() not in HIDDEN_HEADERS},
-            "request_body": body or "",
+            "request_body": mask_params(body or ""),
             "elapsed_seconds": round(elapsed, 3),
         }
         if error:
@@ -168,7 +209,10 @@ def block_ordering(providers):
 def verify_no_secrets(path, secrets):
     with open(path, encoding="utf-8") as file:
         text = file.read()
-    return [s[:2] + "…" for s in secrets if s in text]
+    pattern = _secret_pattern(secrets)
+    if pattern is None:
+        return []
+    return sorted({m.group(0)[:2] + "…" for m in pattern.finditer(text)})
 
 
 def parse_args(argv=None):
