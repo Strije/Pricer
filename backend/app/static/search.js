@@ -75,8 +75,11 @@
         $("find-msg").textContent = "Поставщики называют разные бренды — выберите нужный";
       });
       on("partial", (d) => { if (d.stale) return; S.offers = d.offers; renderAll(); $("count").textContent = `Найдено ${d.total}, поиск продолжается…`; });
-      on("done", (d) => {
-        es.close(); $("go").disabled = false;
+      on("done", async () => {
+        es.close();
+        let d;
+        try { d = await api(`/api/find/${r.job_id}/results`); } catch (err) { $("go").disabled = false; $("count").textContent = "Ошибка: " + err.message; return; }
+        $("go").disabled = false;
         S.offers = d.offers; S.highlights = d.highlights || {};
         if (!S.touchedReturn) $("only-return").checked = !!d.hide_no_return;
         renderAll(((performance.now() - started) / 1000).toFixed(1), d.total);
@@ -140,7 +143,7 @@
     $("brand-change").classList.toggle("hidden", d.choices.length < 2);
     const top = S.allBrands ? d.choices : d.choices.slice(0, 6);
     $("brand-choices").innerHTML = top.map((c) => `<button class="${c.label === d.selected ? "" : "secondary"}" data-brand="${esc(c.label)}"
-        title="${esc(c.providers.join(", "))}">${esc(c.brand)}${c.name ? ` <span class="note">${esc(c.name)}</span>` : ""} · ${c.votes}</button>`).join("") +
+        title="${esc(c.providers.join(", "))}${c.mentions ? ` · упоминаний в названиях: ${c.mentions}` : ""}">${esc(c.brand)}${c.name ? ` <span class="note">${esc(c.name)}</span>` : ""} · ${c.votes}</button>`).join("") +
       (d.choices.length > top.length ? `<button class="link" id="brand-more">ещё ${d.choices.length - top.length}</button>` : "");
     if ($("brand-more")) $("brand-more").onclick = () => { S.allBrands = true; renderBrandbar(d); };
     document.querySelectorAll("[data-brand]").forEach((b) => b.onclick = () => {

@@ -48,7 +48,9 @@ def choose_brand(choices, answered, share=DEFAULT_BRAND_SHARE, lead=DEFAULT_BRAN
         return choices[0]
     first, second = choices[0], choices[1]
     total = max(len(answered or []), 1)
-    if first["votes"] >= share * total and first["votes"] >= lead * max(second["votes"], 0.5):
+    # голоса поставщиков плюс упоминания бренда в названиях других вариантов («ан. MAHLE OC90»)
+    score = lambda c: c.get("score", c["votes"])  # noqa: E731
+    if first["votes"] >= share * total and score(first) >= lead * max(score(second), 0.5):
         return first
     return None
 
@@ -76,7 +78,7 @@ def default_warranty():
 
 
 def brand_view(choice):
-    return {key: choice[key] for key in ("label", "brand", "votes", "providers", "name")}
+    return {key: choice.get(key) for key in ("label", "brand", "votes", "mentions", "providers", "name")}
 
 
 def offer_view(item, engine, customer=False):

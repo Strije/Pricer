@@ -202,7 +202,19 @@ class ProcurementEngine:
             names = sorted({c.name for c in choice.candidates if c.name}, key=len)
             out.append({"label": choice.label, "brand": choice.canonical_brand, "votes": len(providers),
                         "providers": providers, "name": names[0] if names else "", "choice": choice})
-        out.sort(key=lambda row: -row["votes"])  # устойчиво: при равенстве — порядок десктопа
+        # Упоминания: аналоги часто пишут настоящего производителя в названии («[ан. MAHLE OC90]»,
+        # «W712/95 Фильтр масляный MANN») — это ещё голос за него (запись 02.10.2026: W71295 —
+        # MANN 7 голосов + 2 упоминания против Redskin 4).
+        for row in out:
+            word = re.sub(r"\s+", " ", str(row["brand"] or "").strip().upper())
+            row["mentions"] = 0
+            if len(word) >= 3:
+                pattern = re.compile(r"(?<![A-ZА-ЯЁ0-9])" + re.escape(word) + r"(?![A-ZА-ЯЁ0-9])")
+                row["mentions"] = sum(
+                    1 for other in out if other is not row
+                    for c in other["choice"].candidates if c.name and pattern.search(str(c.name).upper()))
+            row["score"] = row["votes"] + row["mentions"]
+        out.sort(key=lambda row: (-row["score"], -row["votes"]))  # при равенстве — порядок десктопа
         return out, answered
 
     def search_offers(self, article, choice=None):

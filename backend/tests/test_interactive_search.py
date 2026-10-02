@@ -110,7 +110,8 @@ def test_find_api(app_factory):  # noqa: F811
         brands = next(d for k, d in events if k == "brands")
         assert brands["selected"] == "ZIC" or brands["selected"].startswith("ZIC")
         assert brands["auto"] and brands["choices"][0]["votes"] == 3
-        done = next(d for k, d in events if k == "done")
+        assert next(d for k, d in events if k == "done")["total"] == 4
+        done = client.get(f"/api/find/{job}/results").json()
         assert "provider" in kinds and done["total"] == 4
         own = [o for o in done["offers"] if not o.get("is_cross")]
         assert {o["provider_confirm_count"] for o in own} == {3}

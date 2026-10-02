@@ -60,7 +60,7 @@ SETTINGS_UPLOAD_LIMIT = 2 * 1024 * 1024
 ORDER_FILE_LIMIT = 5 * 1024 * 1024
 ORDER_FILE_ROWS = 1000
 FILE_ALTERNATIVES = 30
-FIND_LIMIT = 1500  # предложений в выдаче поиска (у ходовых номеров с аналогами бывает больше тысячи)
+FIND_LIMIT = 5000  # предложений в выдаче поиска (запись 02.10.2026: у 162622 — 2407)
 
 
 # ---------- схемы запросов ----------
@@ -306,8 +306,12 @@ def create_app(var_dir=None, database_url=None):
 
         from app import replay
 
-        name = replay_value if replay_value not in ("1", "true") else "search-2026-10-02.jsonl.gz"
-        state["replayer"] = replay.install(_Patch(), replay.load(name), reuse=True)
+        if replay_value in ("1", "true"):
+            # строки файла заказа (search-…) и поиск «Проценки» по артикулу (find-…: 162622, W71295, OC90)
+            records = replay.load("find-2026-10-02.jsonl.gz") + replay.load("search-2026-10-02.jsonl.gz")
+        else:
+            records = replay.load(replay_value)
+        state["replayer"] = replay.install(_Patch(), records, reuse=True)
         time.sleep = lambda *_: None  # опрос Avtoto в записи не ждёт
         favorit.datetime = replay.FrozenDateTime
         armtek.datetime = replay.frozen_datetime_module()  # только внутри модуля Armtek
@@ -406,6 +410,9 @@ def create_app(var_dir=None, database_url=None):
         return user
 
     app = FastAPI(title="Pricer", version="0.3.0")
+    from starlette.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=2000)  # поток событий (SSE) не сжимается
     app.state.pricer = {"state": state, "engine_for": engine_for, "Session": Session}  # для тестов
 
     @app.middleware("http")
@@ -671,7 +678,9 @@ def create_app(var_dir=None, database_url=None):
                 elif kind == "results" and time.monotonic() - last_push[0] > 0.7:
                     # промежуточная выдача — не чаще раза в 0,7 с; после завершения убирается из job
                     last_push[0] = time.monotonic()
-                    rows = [search_service.offer_view(i, engine, customer) for i in data[:FIND_LIMIT]]
+                    # промежуточно — только сам искомый номер (его немного), аналоги придут в итоге
+                    own = [i for i in data if not i.get("is_cross")][:300]
+                    rows = [search_service.offer_view(i, engine, customer) for i in own]
                     drop_partials()
                     job.push("partial", engine.redactor.messages({"offers": rows, "total": len(data)}))
 
@@ -703,12 +712,16 @@ def create_app(var_dir=None, database_url=None):
                 engine.on_search_event = on_event
                 results = engine.search_offers(req.article, picked["choice"] if picked else None)
                 job.results = [{"alternatives": results}]  # для «В корзину»: предложение берём отсюда
-                rows = [search_service.offer_view(i, engine, customer) for i in results[:FIND_LIMIT]]
-                drop_partials()
-                job.push("done", engine.redactor.messages({
+                # Итог отдаётся отдельным сжатым запросом (/api/find/{id}/results): у ходовых номеров
+                # тысячи предложений (162622 — 2407 в 359 группах), в потоке событий это мегабайты.
+                ordered = sorted(results, key=lambda i: bool(i.get("is_cross")))  # искомый номер — всегда целиком
+                rows = [search_service.offer_view(i, engine, customer) for i in ordered[:FIND_LIMIT]]
+                job.payload = engine.redactor.messages({
                     "article": req.article, "brand": picked["brand"] if picked else "",
                     "offers": rows, "total": len(results), "highlights": search_service.highlights(rows),
-                    "hide_no_return": bool(engine.hide_no_return)}))
+                    "hide_no_return": bool(engine.hide_no_return)})
+                drop_partials()
+                job.push("done", {"total": len(results), "shown": len(rows)})
             except Exception as exc:  # ошибка показывается пользователю, сервис продолжает работать
                 job.push("error", {"message": engine.redactor.text(f"{type(exc).__name__}: {exc}")[:300]})
             finally:
@@ -727,6 +740,13 @@ def create_app(var_dir=None, database_url=None):
             state["jobs"].pop(old.id, None)
         threading.Thread(target=run_find, args=(job, user["role"] == "customer"), daemon=True).start()
         return {"job_id": job.id, "providers": engine.provider_names}
+
+    @app.get("/api/find/{job_id}/results")
+    def find_results(job_id: str, user=Depends(current_user)):
+        job = state["jobs"].get(job_id)
+        if job is None or job.organization_id != user["organization_id"] or getattr(job, "payload", None) is None:
+            raise HTTPException(status_code=404, detail="результат поиска устарел — повторите поиск")
+        return job.payload
 
     @app.get("/api/me/favorites")
     def get_favorites(user=Depends(current_user)):
