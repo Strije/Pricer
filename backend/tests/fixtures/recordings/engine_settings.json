@@ -1,0 +1,305 @@
+{
+ "profit_league": {
+  "enabled": true,
+  "api_key": "REPLAYSECRET",
+  "create_order": true,
+  "order_method": "2",
+  "order_payment": "2",
+  "timeout": 12,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "favorit": {
+  "enabled": true,
+  "api_key": "REPLAYSECRET",
+  "developer_key": "REPLAYSECRET",
+  "trade_point": "1",
+  "payment_type": "2",
+  "delivery_type": "1",
+  "transport_type": "1",
+  "include_analogues": true,
+  "timeout": 12,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "armtek": {
+  "enabled": true,
+  "login": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "vkorg": "4000",
+  "kunnr": "1",
+  "kunnr_we": "1",
+  "use_pickup": false,
+  "incoterms": "Не выбран",
+  "kunnr_za": "1",
+  "parnr": "1",
+  "vbeln": "1",
+  "allowed_warehouses": "MOV0045404,MOV0006959,MOV0007296,MOV0006942,MOV0006930,MOV0007276",
+  "timeout": 12,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "forum_auto": {
+  "enabled": true,
+  "login": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "include_crosses": true,
+  "external_order_id": "",
+  "allowed_warehouses": "MSK,MSK-CD,RST,CRI",
+  "timeout": 10,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "mikado": {
+  "enabled": true,
+  "login": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "timeout": 10,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": "Севастополь = 1,0"
+ },
+ "abstd": {
+  "enabled": true,
+  "login": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "agreement_id": "1",
+  "cart_id": "0",
+  "delivery_address_id": "1",
+  "delivery_type_id": "2",
+  "allowed_warehouses": "ABS MSK,ABS Sochi,ABS VLD,ABS STV,ABS Adler,ABS PTG,ABS RND,ABS KRD,ABS KRYM",
+  "timeout": 10,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "rossko": {
+  "enabled": true,
+  "key1": "REPLAYSECRET",
+  "key2": "REPLAYSECRET",
+  "delivery_id": "1",
+  "address_id": "1",
+  "payment_id": "1",
+  "requisite_id": "1",
+  "contact_name": "REPLAYSECRET",
+  "contact_phone": "REPLAYSECRET",
+  "allowed_warehouses": "HST179720381,HST224,HST142374868,HST588592306,HST834",
+  "timeout": 15,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "avtoto": {
+  "enabled": true,
+  "client_id": "REPLAYSECRET",
+  "login": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "include_crosses": true,
+  "excluded_warehouses": "Эмираты, США, Япония, Европа",
+  "timeout": 20,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "tiss_tmparts": {
+  "enabled": true,
+  "api_key": "REPLAYSECRET",
+  "legal_organization_id": "1",
+  "contract_id": "1",
+  "outlet_id": "1",
+  "warehouse_mode": "1",
+  "allowed_warehouses": "25faa4f0-d235-4017-a086-c774e7186c93,6fe07150-12f0-4fbc-b312-ba33484c34b6,8cd5dcf0-1982-4b21-8d1b-d621ca5ece47,923a6971-4b0d-4afe-9689-533bba6f01db",
+  "include_analogues": true,
+  "delivery_type": "ToOutlet",
+  "phone_number": "REPLAYSECRET",
+  "one_time_delivery": true,
+  "not_group_reserves": false,
+  "express_delivery": false,
+  "timeout": 20,
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price",
+  "warehouse_extra_days": ""
+ },
+ "tradesoft": {
+  "enabled": true,
+  "user": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "provider_id": "AVTOFORMULA",
+  "provider_login": "REPLAYSECRET",
+  "provider_password": "REPLAYSECRETPW",
+  "include_analogues": true,
+  "timeout": 20,
+  "direct_result_limit": 5,
+  "repeat_result_limit": 1,
+  "analog_result_limit": 1,
+  "result_limit_sort": "price_delivery",
+  "warehouse_extra_days": ""
+ },
+ "abcp_reference": {
+  "enabled": true,
+  "host": "id25202.public.api.abcp.ru",
+  "login": "REPLAYSECRET",
+  "password": "REPLAYSECRETPW",
+  "include_crosses": true,
+  "include_images": true,
+  "allow_articles_info": false,
+  "articles_info_daily_limit": 8,
+  "brand_reference_path": "",
+  "timeout": 8
+ },
+ "abcp_suppliers": [
+  {
+   "name": "ABCP Поставщик",
+   "enabled": true,
+   "host": "id25202.public.api.abcp.ru",
+   "login": "REPLAYSECRET",
+   "password": "REPLAYSECRETPW",
+   "payment_method": "",
+   "shipment_method": "",
+   "shipment_address": "0",
+   "shipment_office": "",
+   "include_analogues": true,
+   "timeout": 15,
+   "direct_result_limit": 50,
+   "repeat_result_limit": 3,
+   "analog_result_limit": 250,
+   "result_limit_sort": "delivery_price",
+   "warehouse_extra_days": ""
+  }
+ ],
+ "default_markup": 65.0,
+ "markup_rules": [
+  {
+   "from": 0.0,
+   "to": 150.0,
+   "percent": 65.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 150.0,
+   "to": 300.0,
+   "percent": 60.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 300.0,
+   "to": 500.0,
+   "percent": 51.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 500.0,
+   "to": 1100.0,
+   "percent": 49.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 1100.0,
+   "to": 1400.0,
+   "percent": 47.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 1400.0,
+   "to": 1600.0,
+   "percent": 45.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 1600.0,
+   "to": 1900.0,
+   "percent": 40.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 1900.0,
+   "to": 2500.0,
+   "percent": 38.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 2500.0,
+   "to": 3000.0,
+   "percent": 37.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 3000.0,
+   "to": 5000.0,
+   "percent": 35.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 5000.0,
+   "to": 7000.0,
+   "percent": 25.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 7000.0,
+   "to": 10000.0,
+   "percent": 24.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 10000.0,
+   "to": 15000.0,
+   "percent": 23.0,
+   "fixed": 0.0
+  },
+  {
+   "from": 15000.0,
+   "to": 9999999.0,
+   "percent": 17.0,
+   "fixed": 0.0
+  }
+ ],
+ "rounding_mode": "rubles_10",
+ "rounding_from": 0.0,
+ "rounding_to": 10000000.0,
+ "default_comment": "",
+ "expected_ip": "",
+ "hide_no_return": true,
+ "max_crosses": 0,
+ "provider_cache": {
+  "enabled": true,
+  "ttl_seconds": 3600,
+  "max_entries": 2000
+ },
+ "first_run": false,
+ "url_csv": {
+  "enabled": false,
+  "name": "ABCP Поставщик",
+  "timeout": 30,
+  "cache_hours": 24,
+  "column_map": {},
+  "default_days": "0,0",
+  "warehouse_extra_days": "",
+  "direct_result_limit": 50,
+  "repeat_result_limit": 3,
+  "analog_result_limit": 250,
+  "result_limit_sort": "delivery_price"
+ }
+}
