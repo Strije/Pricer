@@ -6,7 +6,8 @@
 - сигнал интерфейса log_signal.emit -> обратный вызов log;
 - флажок наценки в боковой панели -> атрибут markup_enabled;
 - настройка поставщиков из load_settings -> configure(settings).
-Сгенерировано скриптом из main.py; правки логики делаются уже здесь, с тестами.
+Сгенерировано скриптом tools/gen_engine.py из main.py; дальнейшие правки делаются уже здесь,
+с тестами. Добавлено вручную: on_provider_progress (итог по каждому поставщику для веба).
 """
 import datetime
 import math
@@ -100,6 +101,22 @@ def default_settings():
     return default
 
 
+class _ProgressList(list):
+    """Список итогов по поставщикам, который сообщает о каждом новом итоге (для прогресса в вебе)."""
+
+    def __init__(self, callback=None):
+        super().__init__()
+        self._callback = callback
+
+    def append(self, item):
+        super().append(item)
+        if self._callback:
+            try:
+                self._callback(dict(item))
+            except Exception:
+                pass  # сбой показа прогресса не должен ломать поиск
+
+
 class ProcurementEngine:
     def __init__(self, settings=None, *, brand_aliases=None, cross_store=None, detailed_logger=None,
                  log=None, providers=None):
@@ -112,6 +129,7 @@ class ProcurementEngine:
         self.provider_circuit = ProviderCircuitBreaker(threshold=5, cooldown_seconds=45)
         self._order_file_search_id = 0
         self._selected_brand_variants = {}
+        self.on_provider_progress = None
         self.configure(self.settings)
         if providers is not None:
             self.providers = list(providers)
@@ -526,7 +544,7 @@ class ProcurementEngine:
         if not providers:
             return [], []
         offers = []
-        provider_stats = []
+        provider_stats = _ProgressList(getattr(self, "on_provider_progress", None))
         executor = ThreadPoolExecutor(max_workers=max(1, len(providers)))
         started_at = time.monotonic()
         futures = {}

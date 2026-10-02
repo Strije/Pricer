@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pricer — проценка</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #172033; --muted: #64748b; --line: #e2e8f0;
+    --accent: #2563eb; --accent-soft: #dbeafe; --ok: #15803d; --ok-soft: #dcfce7;
+    --warn: #b45309; --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2; --best: #fff7ed;
+    --analog: #7c3aed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1420; --panel: #171e2c; --text: #e5e9f0; --muted: #94a3b8; --line: #2a3446;
+      --accent: #60a5fa; --accent-soft: #1e3a5f; --ok: #4ade80; --ok-soft: #14321f;
+      --warn: #fbbf24; --warn-soft: #3b2f12; --bad: #f87171; --bad-soft: #3b1717; --best: #2b2112;
+      --analog: #a78bfa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+           display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 18px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); }
+  main { max-width: 1280px; margin: 0 auto; padding: 16px 20px 40px; }
+  form { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; background: var(--panel);
+         border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+                  border-radius: 8px; padding: 7px 10px; min-width: 0; }
+  input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  #brand { width: 150px; } #article { width: 170px; } #quantity { width: 80px; }
+  .check { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 8px; color: var(--text); font-weight: 500; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 8px 18px; cursor: pointer;
+           background: var(--accent); color: #fff; }
+  button:disabled { opacity: .6; cursor: progress; }
+  .providers { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+  .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  .chip.wait { color: var(--muted); } .chip.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .chip.empty { color: var(--muted); } .chip.timeout, .chip.skipped { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .chip.error { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+  .summary { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; display: none; }
+  .summary h2 { margin: 0 0 6px; font-size: 15px; }
+  .summary .big { font-size: 22px; font-weight: 700; }
+  .summary .muted, .muted { color: var(--muted); }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; flex-wrap: wrap; gap: 8px; }
+  .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); position: sticky; top: 0; background: var(--panel); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.name { white-space: normal; min-width: 220px; }
+  tr.selected td { background: var(--best); font-weight: 600; }
+  .an { color: var(--analog); font-weight: 700; font-size: 11px; margin-left: 4px; }
+  .hide-purchase .purchase { display: none; }
+  @media (max-width: 640px) { main { padding: 12px 16px 32px; } #brand, #article { width: 100%; } form > * { flex: 1 1 140px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pricer</h1><span class="sub">проценка по всем поставщикам</span>
+  <span class="badge" id="replay" hidden>демонстрация на записанных ответах</span>
+</header>
+<main>
+  <form id="form">
+    <label>Бренд <input id="brand" required value="MANN" autocomplete="off"></label>
+    <label>Артикул <input id="article" required value="W712/95" autocomplete="off"></label>
+    <label>Кол-во <input id="quantity" type="number" min="1" value="1"></label>
+    <label>Подбор
+      <select id="strategy">
+        <option value="price">Минимальная цена</option>
+        <option value="fastest">Минимальный срок</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="analogs"> с аналогами</label>
+    <button id="go">Найти</button>
+  </form>
+
+  <div class="providers" id="providers"></div>
+
+  <section class="summary" id="summary">
+    <h2 id="sum-status"></h2>
+    <div id="sum-body"></div>
+  </section>
+
+  <div class="toolbar">
+    <span class="muted" id="count"></span>
+    <label class="check"><input type="checkbox" id="customer"> вид для клиента (скрыть закупку)</label>
+  </div>
+  <div class="table-wrap" id="wrap" hidden>
+    <table>
+      <thead><tr>
+        <th>Поставщик</th><th>Бренд</th><th>Артикул</th><th>Наименование</th><th>Склад</th>
+        <th class="num">Наличие</th><th class="num">Срок</th>
+        <th class="num purchase">Закупка, ₽</th><th class="num">Продажа, ₽</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const UNKNOWN_HOURS = 999999 * 24;
+const money = (v) => v == null || v === "" ? "—" : Number(v).toLocaleString("ru-RU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const days = (h) => h == null || h >= UNKNOWN_HOURS ? "—" : (h <= 0 ? "сегодня" : Math.ceil(h / 24) + " дн");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const STATUS = {ok: "ок", empty: "пусто", timeout: "таймаут", error: "ошибка", skipped: "пропущен", cancelled: "отменён", local_skipped: "локальный"};
+
+try { $("customer").checked = localStorage.getItem("pricer.customer") === "1"; } catch (e) {}
+const applyCustomer = () => {
+  document.body.classList.toggle("hide-purchase", $("customer").checked);
+  try { localStorage.setItem("pricer.customer", $("customer").checked ? "1" : "0"); } catch (e) {}
+};
+$("customer").addEventListener("change", applyCustomer); applyCustomer();
+
+fetch("/api/status").then((r) => r.json()).then((s) => { $("replay").hidden = !s.replay_mode; renderChips(s.providers, {}); });
+
+function renderChips(names, states) {
+  $("providers").innerHTML = names.map((n) => {
+    const s = states[n];
+    if (!s) return `<span class="chip wait">${esc(n)}</span>`;
+    const cls = s.status === "ok" ? "ok" : (s.status || "empty");
+    const extra = s.status === "ok" ? ` · ${s.count}` : ` · ${STATUS[s.status] || s.status}`;
+    return `<span class="chip ${cls}" title="${esc(s.reason || s.message || "")}">${esc(n)}${extra}</span>`;
+  }).join("");
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("go").disabled = true; $("summary").style.display = "none"; $("wrap").hidden = true; $("count").textContent = "Ищу…";
+  const body = {brand: $("brand").value.trim(), article: $("article").value.trim(),
+                quantity: Number($("quantity").value) || 1, with_analogs: $("analogs").checked, strategy: $("strategy").value};
+  const started = performance.now();
+  try {
+    const resp = await fetch("/api/search", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    if (!resp.ok) throw new Error("сервер ответил " + resp.status);
+    const {job_id, providers} = await resp.json();
+    const states = {}; renderChips(providers, states);
+    const es = new EventSource(`/api/search/${job_id}/events`);
+    es.addEventListener("provider", (ev) => { const s = JSON.parse(ev.data); states[s.provider] = s; renderChips(providers, states); });
+    es.addEventListener("result", (ev) => { es.close(); render(JSON.parse(ev.data), (performance.now() - started) / 1000); $("go").disabled = false; });
+    es.addEventListener("error", (ev) => {
+      es.close(); $("go").disabled = false;
+      $("count").textContent = ev.data ? "Ошибка: " + JSON.parse(ev.data).message : "Соединение прервано";
+    });
+  } catch (err) { $("count").textContent = "Ошибка: " + err.message; $("go").disabled = false; }
+});
+
+function render(res, seconds) {
+  const o = res.offer;
+  $("summary").style.display = "block";
+  $("sum-status").textContent = res.status + (res.reason ? " — " + res.reason : "");
+  $("sum-body").innerHTML = o ? `
+    <div class="big">${money(o.sale_price)} ₽ <span class="muted purchase" style="font-size:14px;font-weight:500">закупка ${money(o.price)} ₽</span></div>
+    <div>${esc(o.provider)} · ${esc(o.display_brand || o.brand)} ${esc(o.article)} · ${esc(o.warehouse || "")} · ${days(o.delivery_hours)} · ${res.quantity} шт.</div>
+    <div class="muted">${esc(o.name || "")}</div>` : `<div class="muted">Подходящего предложения нет</div>`;
+  const rows = res.alternatives || [];
+  $("count").textContent = `Предложений: ${res.alternatives_total}${res.alternatives_total > rows.length ? `, показаны первые ${rows.length}` : ""} · ${seconds.toFixed(1)} с`;
+  $("rows").innerHTML = rows.map((r) => `
+    <tr class="${o && r.internal_offer_id === o.internal_offer_id ? "selected" : ""}">
+      <td>${esc(r.provider)}</td><td>${esc(r.display_brand || r.brand)}</td>
+      <td>${esc(r.article)}${r.is_cross ? '<span class="an">АН</span>' : ""}</td>
+      <td class="name">${esc(r.name)}</td><td>${esc(r.warehouse)}</td>
+      <td class="num">${r.available_quantity ?? "—"}</td><td class="num">${days(r.delivery_hours)}</td>
+      <td class="num purchase">${money(r.price)}</td><td class="num">${money(r.sale_price)}</td>
+    </tr>`).join("");
+  $("wrap").hidden = rows.length === 0;
+}
+</script>
+</body>
+</html>

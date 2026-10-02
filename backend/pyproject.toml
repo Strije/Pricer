@@ -7,12 +7,14 @@ dependencies = [
     "zeep>=4.2.0",
     "openpyxl>=3.1.0",
     "py7zr>=1.1.3",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [tool.pytest.ini_options]
 # Модули ядра пока плоские (import provider_adapter); пакет core появится на следующем шаге.
-pythonpath = ["core", "integrations"]
+pythonpath = [".", "core", "integrations"]
 testpaths = ["tests"]
