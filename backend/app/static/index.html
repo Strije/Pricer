@@ -64,7 +64,7 @@
   td select { max-width: 280px; }
   .hide-purchase .purchase { display: none; }
   .hidden { display: none !important; }
-  .cartbtn { background: var(--accent-soft); color: var(--accent); padding: 5px 12px; font-size: 13px; }
+  .cartbtn { background: var(--accent-soft); color: var(--accent); padding: 5px 12px; font-size: 13px; white-space: nowrap; }
   .auth { max-width: 380px; margin: 48px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
   .auth h2 { margin: 0 0 14px; font-size: 18px; }
   .auth label { margin-bottom: 10px; } .auth input { width: 100%; }
@@ -171,6 +171,23 @@
     .toolbar > .row { gap: 6px; }
     .buy input { width: 56px; } .cart-add { padding: 8px 14px; }
   }
+  .acc-tools { margin-bottom: 10px; }
+  .acc-list { display: flex; flex-direction: column; gap: 8px; }
+  details.acc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  details.acc > summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; flex-wrap: wrap; }
+  details.acc > summary::-webkit-details-marker { display: none; }
+  details.acc > summary::after { content: "▾"; color: var(--muted); margin-left: 4px; transition: transform .15s; }
+  details.acc[open] > summary::after { transform: rotate(180deg); }
+  .acc-name { flex: 1 1 200px; min-width: 0; }
+  .acc-msg { display: block; font-size: 12px; color: var(--bad); overflow-wrap: anywhere; }
+  .acc-body { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; display: grid;
+              grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0 14px; }
+  .acc-body > .row { grid-column: 1 / -1; }
+  .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; padding: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: .15s; }
+  .switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+  .switch input:checked + span { background: var(--ok); } .switch input:checked + span::before { transform: translateX(16px); }
 </style>
 </head>
 <body>
@@ -420,7 +437,9 @@
       <div class="note">Иначе поиск предложит выбрать бренд. Голоса — сколько поставщиков назвали бренд для артикула;
         упоминание бренда в названиях других вариантов («ан. MAHLE OC90») считается ещё одним голосом.</div>
     </details>
-    <div class="panel">
+    <details class="panel" id="sup-add"><summary><strong>Добавить или импортировать</strong> <span class="note">поставщик вручную или все из settings.json десктопа</span></summary>
+      <div style="margin-top:10px">
+    <div>
       <div class="row">
         <strong>Импорт из десктопной программы</strong>
         <input type="file" id="import-file" accept=".json,application/json">
@@ -429,13 +448,21 @@
       <div class="note">Заменяет всех поставщиков организации и переносит наценки и фильтры. Пароли и ключи шифруются на сервере.</div>
       <div class="msg" id="import-msg"></div>
     </div>
-    <div class="panel row">
+    <div class="row" style="margin-top:12px">
       <strong>Добавить поставщика</strong>
       <select id="add-section"></select>
       <button class="secondary" id="add-go">Добавить</button>
       <span class="msg" id="add-msg"></span>
     </div>
-    <div class="cards" id="cards"></div>
+      </div>
+    </details>
+    <div class="row acc-tools">
+      <input id="sup-q" placeholder="Поиск поставщика" style="flex:1 1 220px">
+      <span class="seg" id="sup-filter"><button data-sf="" class="on">Все</button><button data-sf="ok">Работают</button><button data-sf="bad">Ошибки</button><button data-sf="off">Выключены</button></span>
+      <button class="secondary small" id="sup-check-all">Проверить всех</button>
+      <span class="note" id="sup-count"></span>
+    </div>
+    <div id="cards" class="acc-list"></div>
   </section>
 </main>
 <div id="toasts" aria-live="polite"></div>
@@ -518,16 +545,75 @@ document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
   if (t.dataset.tab === "lines") { loadLines(); loadReliability(); }
 });
 
-async function loadSuppliers() {
-  const list = await api("/api/suppliers");
-  $("cards").innerHTML = list.length ? "" : '<div class="note">Поставщики не подключены. Импортируйте settings.json или добавьте поставщика.</div>';
-  for (const acc of list) $("cards").appendChild(supplierCard(acc));
+// ---------- поставщики: аккордеон с поиском, статусом и проверкой ----------
+let supList = [], supFilter = "";
+function supState(acc) {
+  if (acc.config.enabled === false) return ["off", "выключен", "muted"];
+  if (!acc.active) return ["bad", "не хватает данных", "warn"];
+  const st = acc.status || {};
+  if (st.ok === false) return ["bad", "ошибка", "bad"];
+  if (st.ok) return ["ok", `работает${st.seconds != null ? " · " + String(st.seconds).replace(".", ",") + " с" : ""}`, "ok"];
+  return ["ok", "подключён", "ok"];
 }
+async function loadSuppliers() {
+  supList = await api("/api/suppliers");
+  renderSuppliers();
+}
+function renderSuppliers() {
+  const q = $("sup-q").value.trim().toLowerCase();
+  const shown = supList.filter((acc) => (!q || `${acc.name} ${acc.title}`.toLowerCase().includes(q)) && (!supFilter || supState(acc)[0] === supFilter));
+  const open = new Set([...document.querySelectorAll("#cards details[open]")].map((d) => d.dataset.id));
+  $("cards").innerHTML = supList.length ? "" : '<div class="note">Поставщики не подключены. Импортируйте settings.json или добавьте поставщика.</div>';
+  for (const acc of shown) $("cards").appendChild(supplierRow(acc, open.has(String(acc.id))));
+  const bad = supList.filter((a) => supState(a)[0] === "bad").length;
+  $("sup-count").textContent = supList.length ? `${shown.length} из ${supList.length}${bad ? ` · с ошибками ${bad}` : ""}` : "";
+}
+function supplierRow(acc, open) {
+  const [, label, cls] = supState(acc), st = acc.status || {};
+  const rel = typeof reliability !== "undefined" ? reliability[acc.name] : null;
+  const det = document.createElement("details"); det.className = "acc"; det.dataset.id = acc.id; det.open = open;
+  det.innerHTML = `<summary>
+      <label class="switch" title="Включить или выключить"><input type="checkbox" data-en ${acc.config.enabled === false ? "" : "checked"}><span></span></label>
+      <span class="acc-name"><strong>${esc(acc.name)}</strong>${acc.title !== acc.name ? ` <span class="note">${esc(acc.title)}</span>` : ""}
+        ${st.ok === false && st.message ? `<span class="acc-msg">${esc(st.message)}</span>` : ""}</span>
+      ${rel && rel.enough_data ? `<span class="note" title="по журналу заказов поставщикам">отказы ${rel.refused_pct}%</span>` : ""}
+      <span class="st ${cls}" title="${esc(st.message || "")}${st.at ? " · проверено " + esc(st.at.replace("T", " ")) : ""}">${esc(label)}</span>
+      <button type="button" class="secondary small" data-check>Проверить</button>
+    </summary>`;
+  det.appendChild(supplierCard(acc));
+  det.querySelector("[data-en]").onclick = (e) => e.stopPropagation();
+  det.querySelector("[data-en]").onchange = async (e) => {
+    try { await api(`/api/suppliers/${acc.id}`, {method: "PUT", body: {config: {...acc.config, enabled: e.target.checked}, secrets: {}}}); await loadSuppliers(); boot(); }
+    catch (err) { alert(err.message); }
+  };
+  det.querySelector("[data-check]").onclick = (e) => { e.preventDefault(); checkSupplier(acc, e.target); };
+  return det;
+}
+async function checkSupplier(acc, button) {
+  if (button) { button.disabled = true; button.textContent = "Проверяю…"; }
+  try { acc.status = await api(`/api/suppliers/${acc.id}/check`, {method: "POST"}); } catch (err) { acc.status = {ok: false, message: err.message}; }
+  renderSuppliers();
+}
+$("sup-q").addEventListener("input", renderSuppliers);
+document.querySelectorAll("#sup-filter [data-sf]").forEach((b) => b.onclick = () => {
+  supFilter = b.dataset.sf; document.querySelectorAll("#sup-filter [data-sf]").forEach((x) => x.classList.toggle("on", x === b)); renderSuppliers();
+});
+$("sup-check-all").onclick = async () => {
+  $("sup-check-all").disabled = true;
+  const todo = supList.filter((a) => a.active && a.config.enabled !== false && !(catalog[a.section] || {}).service);
+  let done = 0;
+  await Promise.all(todo.map(async (acc) => {  // параллельно: у каждого свой таймаут, медленный не держит остальных
+    try { acc.status = await api(`/api/suppliers/${acc.id}/check`, {method: "POST"}); } catch (err) { acc.status = {ok: false, message: err.message}; }
+    $("sup-check-all").textContent = `Проверено ${++done} из ${todo.length}`; renderSuppliers();
+  }));
+  $("sup-check-all").disabled = false; $("sup-check-all").textContent = "Проверить всех";
+};
 function supplierCard(acc) {
   const spec = catalog[acc.section] || {fields: []};
-  const card = document.createElement("form"); card.className = "card";
+  const card = document.createElement("form"); card.className = "card acc-body";
   const inputs = spec.fields.map((f) => {
     const id = `f-${acc.id}-${f.name}`, val = acc.config[f.name];
+    if (f.name === "enabled") return `<input type="checkbox" id="${id}" ${val === false ? "" : "checked"} hidden>`;  // переключатель — в строке
     if (f.type === "bool") return `<label class="check"><input type="checkbox" id="${id}" ${val ? "checked" : ""}> ${esc(f.label)}</label>`;
     if (f.type === "secret") {
       const set = acc.secrets_set.includes(f.name);
@@ -537,7 +623,7 @@ function supplierCard(acc) {
     }
     return `<label>${esc(f.label)} <input type="${f.type === "int" ? "number" : "text"}" id="${id}" value="${esc(val ?? "")}"></label>`;
   }).join("");
-  card.innerHTML = `<h3><span>${esc(acc.name)}</span><span class="note">${esc(acc.title)}</span></h3>${inputs}
+  card.innerHTML = `${inputs}
     <div class="row"><button>Сохранить</button><button type="button" class="danger" data-del>Удалить</button><span class="msg"></span></div>`;
   const msg = card.querySelector(".msg");
   card.addEventListener("submit", async (e) => {
@@ -550,7 +636,7 @@ function supplierCard(acc) {
       else if (f.type === "secret") { if (el.value.trim()) secrets[f.name] = f.name === "urls" ? el.value.split(/\n+/).map((x) => x.trim()).filter(Boolean) : el.value; }
       else config[f.name] = el.value;
     }
-    try { await api(`/api/suppliers/${acc.id}`, {method: "PUT", body: {config, secrets}}); msg.className = "msg ok"; msg.textContent = "Сохранено"; boot(); }
+    try { await api(`/api/suppliers/${acc.id}`, {method: "PUT", body: {config, secrets}}); msg.className = "msg ok"; msg.textContent = "Сохранено"; boot(); loadSuppliers(); }
     catch (err) { msg.className = "msg"; msg.textContent = err.message; }
   });
   card.querySelector("[data-del]").onclick = async () => {

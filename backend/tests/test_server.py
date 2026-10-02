@@ -190,3 +190,17 @@ def test_validation(app_factory):
     short = make_client().post("/api/auth/register", headers=H,
                                json={"email": "x@y", "password": "short", "organization": "Z"})
     assert short.status_code == 422
+
+
+def test_supplier_list_active_and_check(app_factory):
+    """Список поставщиков: построился ли поставщик из подключения; «Проверить» — пробный запрос."""
+    make_client, _ = app_factory
+    client = register(make_client(), "check@example.com", org="Проверка")
+    created = client.post("/api/suppliers", headers=H, json={"section": "rossko"}).json()
+    row = next(a for a in client.get("/api/suppliers").json() if a["id"] == created["id"])
+    assert row["active"] is False and row["status"] == {}  # ключей нет
+    status = client.post(f"/api/suppliers/{created['id']}/check", headers=H).json()
+    assert status["ok"] is False and "не хватает" in status["message"] and status["at"]
+    assert next(a for a in client.get("/api/suppliers").json() if a["id"] == created["id"])["status"]["ok"] is False
+    other = register(make_client(), "check-other@example.com", org="Чужая")
+    assert other.post(f"/api/suppliers/{created['id']}/check", headers=H).status_code == 404

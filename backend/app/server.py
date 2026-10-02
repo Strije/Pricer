@@ -270,6 +270,7 @@ def _account_view(account, box):
         "config": account.config or {},
         # Наружу уходят только имена заполненных секретных полей, не значения.
         "secrets_set": sorted(key for key, value in secrets.items() if value not in (None, "", [], {})),
+        "status": account.status or {},
     }
 
 
@@ -490,11 +491,83 @@ def create_app(var_dir=None, database_url=None):
     def get_catalog(user=Depends(current_user)):
         return catalog.public_catalog()
 
+    def account_engine(org, account):
+        """Движок только с этим подключением: построился ли из него поставщик (включён и хватает данных)."""
+        from engine import ProcurementEngine
+
+        accounts = [(account.section, account.config, box.open(account.secrets_sealed))]
+        settings = catalog.compose_settings(org.settings or {}, accounts)
+        for section, spec in catalog.CATALOG.items():  # остальные выключены — иначе встанут умолчания движка
+            if section != account.section and not spec.get("multiple"):
+                settings.setdefault(section, {})["enabled"] = False
+        return ProcurementEngine(settings, brand_aliases=brand_resolver())
+
     @app.get("/api/suppliers")
     def list_suppliers(user=Depends(current_user)):
         with Session() as session:
             org = session.get(db.Organization, user["organization_id"])
-            return [_account_view(a, box) for a in sorted(org.accounts, key=lambda a: a.id)]
+            out = []
+            for account in sorted(org.accounts, key=lambda a: a.id):
+                view = _account_view(account, box)
+                if catalog.CATALOG.get(account.section, {}).get("service"):
+                    view["active"] = bool(view["secrets_set"])
+                else:
+                    try:
+                        view["active"] = bool(account_engine(org, account).providers)
+                    except Exception:
+                        view["active"] = False
+                out.append(view)
+            return out
+
+    CHECK_ARTICLE = "OC90"  # ходовой номер: его знают почти все поставщики
+
+    @app.post("/api/suppliers/{account_id}/check")
+    def check_supplier(account_id: int, user=Depends(current_user)):
+        """Пробный запрос к поставщику (бренды для ходового номера): работает ли, сколько отвечает,
+        что ответил при ошибке (неверный ключ, доступ только с разрешённых IP…)."""
+        import concurrent.futures
+
+        with Session() as session:
+            account = session.get(db.SupplierAccount, account_id)
+            if account is None or account.organization_id != user["organization_id"]:
+                raise HTTPException(status_code=404, detail="поставщик не найден")
+            org = session.get(db.Organization, user["organization_id"])
+            engine = account_engine(org, account)
+            secret_values = list(box.open(account.secrets_sealed).values())
+        redactor = Redactor(secret_values + ([replay_module_dummy()] if replay_mode else []))
+        if catalog.CATALOG.get(account.section, {}).get("service"):
+            raise HTTPException(status_code=400, detail="это служебное подключение, а не поставщик")
+        if not engine.providers:
+            status = {"ok": False, "message": "выключен или не хватает данных для подключения"}
+        else:
+            provider = engine.providers[0]
+
+            def probe():
+                method = getattr(provider, "get_brand_candidates", None) or getattr(provider, "get_brands", None)
+                found = method(CHECK_ARTICLE) if callable(method) else provider.get_prices(CHECK_ARTICLE)
+                return len(found or []), str(getattr(provider, "last_message", "") or "")
+
+            started = time.monotonic()
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                count, message = pool.submit(probe).result(timeout=30)
+                ok = count > 0 or not message
+                status = {"ok": ok, "count": count,
+                          "message": message or (f"ответил: {count} вариантов для {CHECK_ARTICLE}" if count else "ответил, вариантов нет")}
+            except concurrent.futures.TimeoutError:
+                status = {"ok": False, "message": "не ответил за 30 секунд"}
+            except Exception as exc:
+                status = {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+            status["seconds"] = round(time.monotonic() - started, 1)
+        status["message"] = redactor.text(status["message"])[:300]
+        status["at"] = db.utcnow().isoformat(timespec="seconds")
+        with Session() as session:
+            account = session.get(db.SupplierAccount, account_id)
+            account.status = status
+            session.commit()
+        return status
 
     def _apply_account(account, payload):
         config = dict(account.config or {})

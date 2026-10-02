@@ -57,6 +57,8 @@ class SupplierAccount(Base):
     section: Mapped[str] = mapped_column(String(50))  # раздел settings.json: armtek, abcp_suppliers, …
     config: Mapped[dict] = mapped_column(JSON, default=dict)  # открытые поля
     secrets_sealed: Mapped[str] = mapped_column(Text, default="")  # зашифрованные секретные поля
+    # последняя проверка подключения: {ok, at, seconds, message}
+    status: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     organization: Mapped[Organization] = relationship(back_populates="accounts")
 
