@@ -5,7 +5,7 @@
 import datetime
 import json
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -57,6 +57,40 @@ class SupplierAccount(Base):
     secrets_sealed: Mapped[str] = mapped_column(Text, default="")  # зашифрованные секретные поля
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     organization: Mapped[Organization] = relationship(back_populates="accounts")
+
+
+class Order(Base):
+    """Заказ: документ в формате десктопа (OrderStore) + поля для поиска и блокировки отправки."""
+    __tablename__ = "orders"
+    __table_args__ = (UniqueConstraint("organization_id", "order_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String(40))  # ORD-ГГГГММДД-NNNN
+    status: Mapped[str] = mapped_column(String(30), default="draft")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Блокировка отправки в базе: повторный запуск отправки того же заказа невозможен даже
+    # из другого процесса. submit_targets — какие позиции уходят (для восстановления после сбоя).
+    submitting: Mapped[bool] = mapped_column(Boolean, default=False)
+    submit_key: Mapped[str] = mapped_column(String(200), default="")
+    submit_targets: Mapped[list] = mapped_column(JSON, default=list)
+    submit_started_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SubmissionLog(Base):
+    """Журнал отправок поставщикам: каждая позиция и ответ поставщика (замена order_history.json)."""
+    __tablename__ = "submission_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)
+    provider: Mapped[str] = mapped_column(String(100), default="")
+    brand: Mapped[str] = mapped_column(String(100), default="")
+    article: Mapped[str] = mapped_column(String(100), default="")
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    response: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
 
 
 def make_sessionmaker(url):

@@ -33,7 +33,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # n
 from pydantic import BaseModel, Field  # noqa: E402
 
 from app import db  # noqa: E402
+from app import orders as order_service  # noqa: E402
 from app import supplier_catalog as catalog  # noqa: E402
+from app.redact import Redactor  # noqa: E402
 from app.security import (  # noqa: E402
     SecretBox, hash_password, load_master_key, new_token, token_hash, verify_password,
 )
@@ -49,6 +51,9 @@ OFFER_FIELDS = (
     "internal_offer_id",
 )
 SETTINGS_UPLOAD_LIMIT = 2 * 1024 * 1024
+ORDER_FILE_LIMIT = 5 * 1024 * 1024
+ORDER_FILE_ROWS = 1000
+FILE_ALTERNATIVES = 30
 
 
 # ---------- схемы запросов ----------
@@ -81,14 +86,47 @@ class AccountRequest(BaseModel):
     secrets: dict = Field(default_factory=dict)
 
 
+class FileRow(BaseModel):
+    brand: str = Field(default="", max_length=80)
+    article: str = Field(min_length=1, max_length=80)
+    name: str = Field(default="", max_length=300)
+    quantity: int = Field(default=1, ge=1, le=100000)
+
+
+class FileSearchRequest(BaseModel):
+    rows: list[FileRow] = Field(min_length=1, max_length=ORDER_FILE_ROWS)
+    with_analogs: bool = False
+    include_no_return: bool = False
+    strategy: str = Field(default="price", pattern="^(price|fastest|price_within_days)$")
+    max_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class CreateOrderRequest(BaseModel):
+    job_id: str
+    rows: list[int] = Field(min_length=1)
+    selections: dict[str, str] = Field(default_factory=dict)  # номер строки -> internal_offer_id
+    client: str = Field(min_length=1, max_length=200)
+    manager: str = Field(default="", max_length=200)
+    ship_date: str = Field(default="", max_length=20)
+    comment: str = Field(default="", max_length=1000)
+    vin: str = Field(default="", max_length=30)
+
+
+class ItemsRequest(BaseModel):
+    items: list[int] | None = None  # None — все позиции заказа
+    confirm: bool = False
+
+
 # ---------- вспомогательное ----------
 
 class Job:
-    def __init__(self, request, organization_id):
+    def __init__(self, request, organization_id, kind="search"):
         self.id = uuid.uuid4().hex
+        self.kind = kind
         self.request = request
         self.organization_id = organization_id
         self.events = []
+        self.results = []
         self.done = False
         self.created = time.time()
 
@@ -117,6 +155,23 @@ def _result_payload(result):
         "alternatives": [_offer(o) for o in alternatives[:RESULT_LIMIT]],
         "alternatives_total": len(alternatives),
     }
+
+
+def _order_view(order):
+    """Заказ для браузера: без сырых снимков ответов поставщиков (они остаются в базе)."""
+    order = dict(order or {})
+    order["items"] = [{k: v for k, v in item.items() if k != "snapshot"} for item in order.get("items") or []]
+    order["groups"] = [{**g, "offers": [{k: v for k, v in o.items() if k != "snapshot"} for o in g.get("offers") or []]}
+                       for g in order.get("groups") or []]
+    return order
+
+
+def _file_row_payload(index, result):
+    payload = _result_payload(result)
+    payload["alternatives"] = payload["alternatives"][:FILE_ALTERNATIVES]
+    payload["index"] = index
+    payload["source"] = {k: (result.get("source") or {}).get(k) for k in ("brand", "article", "name", "quantity")}
+    return payload
 
 
 def _account_view(account, box):
@@ -175,6 +230,11 @@ def create_app(var_dir=None, database_url=None):
         with open(demo_path, encoding="utf-8") as file:
             demo_settings = json.load(file)
 
+    def replay_module_dummy():
+        from app import replay
+
+        return replay.DUMMY
+
     def brand_resolver():
         if state["brand_aliases"] is None:
             state["brand_aliases"] = brand_aliases_module.BrandAliasResolver()
@@ -200,12 +260,24 @@ def create_app(var_dir=None, database_url=None):
 
         with Session() as session:
             settings = org_settings(session, organization_id)
+            org = session.get(db.Organization, organization_id)
+            secret_values = [value for account in org.accounts
+                             for value in box.open(account.secrets_sealed).values()]
+        if replay_mode:
+            secret_values.append(replay_module_dummy())
+        redactor = Redactor(secret_values)
         engine = ProcurementEngine(settings, brand_aliases=brand_resolver())
         engine.provider_names = [PROVIDER_DISPLAY_NAMES.get(type(p).__name__, type(p).__name__)
                                  for p in engine.providers]
         engine.lock = threading.Lock()
+        engine.order_store = order_service.DbOrderStore(Session, organization_id, redactor=redactor)
+        engine.order_history = order_service.DbOrderHistory(Session, organization_id, redactor=redactor)
+        engine.redactor = redactor
         state["engines"][organization_id] = engine
         return engine
+
+    for org_id, order_id in order_service.recover_interrupted_submits(Session):
+        print(f"[pricer] {order_id}: отправка была прервана перезапуском, позиции помечены как unknown")
 
     # ----- сессии -----
 
@@ -235,7 +307,8 @@ def create_app(var_dir=None, database_url=None):
             raise HTTPException(status_code=403, detail="нужны права администратора организации")
         return user
 
-    app = FastAPI(title="Pricer", version="0.2.0")
+    app = FastAPI(title="Pricer", version="0.3.0")
+    app.state.pricer = {"state": state, "engine_for": engine_for, "Session": Session}  # для тестов
 
     @app.middleware("http")
     async def csrf_guard(request: Request, call_next):
@@ -411,14 +484,44 @@ def create_app(var_dir=None, database_url=None):
         invalidate(user["organization_id"])
         return result
 
+    # ----- фоновые задачи -----
+
+    def replay_reset(engine):
+        if state["replayer"] is not None:
+            with state["lock"]:
+                state["replayer"].reset()
+            engine.provider_result_cache.clear()  # иначе повтор возьмёт кэш, а не запись
+
+    def start_job(job, target):
+        state["jobs"][job.id] = job
+        for old in sorted(state["jobs"].values(), key=lambda j: j.created)[:-200]:
+            state["jobs"].pop(old.id, None)
+
+        def runner():
+            engine = engine_for(job.organization_id)
+            with engine.lock:
+                try:
+                    target(engine)
+                except order_service.OrderActionError as exc:
+                    job.push("error", {"message": engine.redactor.text(str(exc))})
+                except Exception as exc:  # ошибка показывается пользователю, сервис продолжает работать
+                    job.push("error", {"message": engine.redactor.text(f"{type(exc).__name__}: {exc}")[:300]})
+                finally:
+                    engine.on_provider_progress = None
+                    engine.on_order_action = None
+                    job.done = True
+
+        threading.Thread(target=runner, daemon=True).start()
+        return job
+
     # ----- поиск -----
 
     def run(job):
         engine = engine_for(job.organization_id)
         with engine.lock:
-            engine.on_provider_progress = lambda stat: job.push("provider", {
+            engine.on_provider_progress = lambda stat: job.push("provider", engine.redactor.messages({
                 key: stat.get(key) for key in ("provider", "status", "reason", "count", "raw_count", "elapsed", "message")
-            })
+            }))
             try:
                 if state["replayer"] is not None:
                     with state["lock"]:
@@ -430,9 +533,9 @@ def create_app(var_dir=None, database_url=None):
                     {"exact_match": not req.with_analogs, "include_no_return": False,
                      "ignore_warehouse_filters": False, "strategy": req.strategy, "max_days": req.max_days},
                 )
-                job.push("result", _result_payload(result))
+                job.push("result", engine.redactor.messages(_result_payload(result)))
             except Exception as exc:  # ошибка показывается пользователю, сервис продолжает работать
-                job.push("error", {"message": f"{type(exc).__name__}: {exc}"[:300]})
+                job.push("error", {"message": engine.redactor.text(f"{type(exc).__name__}: {exc}")[:300]})
             finally:
                 engine.on_provider_progress = None
                 job.done = True
@@ -449,6 +552,171 @@ def create_app(var_dir=None, database_url=None):
         threading.Thread(target=run, args=(job,), daemon=True).start()
         return {"job_id": job.id, "providers": engine.provider_names}
 
+    # ----- заказ из файла -----
+
+    @app.post("/api/order-file/parse")
+    async def parse_order_file(file: UploadFile = File(...), user=Depends(current_user)):
+        import tempfile
+
+        from sales_report_importer import read_sales_report
+
+        raw = await file.read(ORDER_FILE_LIMIT + 1)
+        if len(raw) > ORDER_FILE_LIMIT:
+            raise HTTPException(status_code=413, detail="файл больше 5 МБ")
+        suffix = os.path.splitext(file.filename or "")[1].lower()
+        if suffix not in (".csv", ".txt", ".xlsx", ".xlsm"):
+            raise HTTPException(status_code=400, detail="поддерживаются CSV, TXT и XLSX")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "order" + suffix)
+            with open(path, "wb") as handle:
+                handle.write(raw)
+            try:
+                rows, errors = read_sales_report(path)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"файл не читается: {exc}"[:300])
+        if len(rows) > ORDER_FILE_ROWS:
+            raise HTTPException(status_code=400, detail=f"в файле больше {ORDER_FILE_ROWS} строк")
+        return {"rows": [{k: r.to_dict()[k] for k in ("brand", "article", "name", "quantity")} for r in rows],
+                "errors": list(errors or [])[:50]}
+
+    @app.post("/api/order-file/search")
+    def search_order_file(request: FileSearchRequest, user=Depends(current_user)):
+        engine = engine_for(user["organization_id"])
+        if not engine.providers:
+            raise HTTPException(status_code=400, detail="у организации не подключено ни одного поставщика")
+        job = Job(request, user["organization_id"], kind="file")
+        options = {"exact_match": not request.with_analogs, "include_no_return": request.include_no_return,
+                   "ignore_warehouse_filters": False, "strategy": request.strategy, "max_days": request.max_days}
+
+        def work(engine):
+            ready = 0
+            for index, row in enumerate(request.rows):
+                replay_reset(engine)
+                try:
+                    result = engine.search_order_row(row.model_dump(), options)
+                except Exception as exc:
+                    result = {"status_code": "error", "status": "Ошибка", "reason": str(exc)[:240],
+                              "offer": None, "alternatives": [], "quantity": row.quantity, "source": row.model_dump()}
+                job.results.append(result)
+                ready += result.get("status_code") == "ready"
+                job.push("row", engine.redactor.messages(_file_row_payload(index, result)))
+            job.push("done", {"ready": ready, "total": len(request.rows)})
+
+        start_job(job, work)
+        return {"job_id": job.id, "total": len(request.rows)}
+
+    @app.post("/api/orders")
+    def create_order(request: CreateOrderRequest, user=Depends(current_user)):
+        job = state["jobs"].get(request.job_id)
+        if job is None or job.organization_id != user["organization_id"] or job.kind != "file":
+            raise HTTPException(status_code=404, detail="подбор не найден — повторите поиск по файлу")
+        if not job.done:
+            raise HTTPException(status_code=409, detail="подбор ещё идёт")
+        engine = engine_for(user["organization_id"])
+        with engine.lock:
+            entries, errors = order_service.prepare_entries(engine, job.results, request.rows, request.selections)
+            engine.order_store.user_id = user["id"]
+            try:
+                order = order_service.create_order_from_file(
+                    engine, engine.order_store, entries, manager=request.manager or user["name"] or user["email"],
+                    client=request.client, ship_date=request.ship_date, comment=request.comment, vin=request.vin)
+            except order_service.OrderActionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            finally:
+                engine.order_store.user_id = None
+        return {"order": _order_view(order), "warnings": errors}
+
+    # ----- заказы -----
+
+    def _store(user):
+        return engine_for(user["organization_id"]).order_store
+
+    @app.get("/api/orders")
+    def list_orders(user=Depends(current_user)):
+        rows = []
+        for summary in _store(user).list_order_summaries():
+            items = summary.get("items") or []
+            rows.append({k: summary.get(k) for k in ("order_id", "status", "created_at", "updated_at", "client",
+                                                     "manager", "totals", "verification_status", "client_ship_date")}
+                        | {"items_count": len(items),
+                           "unknown_count": sum(1 for i in items if i.get("submit_status") == "unknown")})
+        return rows
+
+    @app.get("/api/orders/{order_id}")
+    def get_order(order_id: str, user=Depends(current_user)):
+        order = _store(user).read(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="заказ не найден")
+        return _order_view(order)
+
+    @app.get("/api/orders/{order_id}/submit-preview")
+    def preview_submit(order_id: str, items: str | None = None, user=Depends(current_user)):
+        engine = engine_for(user["organization_id"])
+        indexes = [int(x) for x in items.split(",") if x.strip()] if items else None
+        with engine.lock:
+            try:
+                return order_service.submit_preview(engine, engine.order_store, order_id, indexes)
+            except order_service.OrderActionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/api/orders/{order_id}/recheck")
+    def recheck_order(order_id: str, request: ItemsRequest, user=Depends(current_user)):
+        job = Job(request, user["organization_id"], kind="recheck")
+
+        def work(engine):
+            replay_reset(engine)
+            order = order_service.recheck(engine, engine.order_store, order_id, request.items)
+            job.push("done", {"order": _order_view(order)})
+
+        start_job(job, work)
+        return {"job_id": job.id}
+
+    @app.post("/api/orders/{order_id}/submit")
+    def submit_order(order_id: str, request: ItemsRequest, user=Depends(current_user)):
+        if not request.confirm:
+            raise HTTPException(status_code=400, detail="подтвердите отправку (confirm: true)")
+        job = Job(request, user["organization_id"], kind="submit")
+
+        def work(engine):
+            messages = []
+            engine.on_order_action = lambda order, message: messages.append(message)
+            preview, order = order_service.submit(engine, engine.order_store, Session, order_id, request.items)
+            job.push("done", engine.redactor.messages({"order": _order_view(order), "message": " ".join(messages), "preview": preview}))
+
+        start_job(job, work)
+        return {"job_id": job.id}
+
+    def _item_action(user, order_id, index, action):
+        engine = engine_for(user["organization_id"])
+        with engine.lock:
+            if not engine.order_store.read(order_id):
+                raise HTTPException(status_code=404, detail="заказ не найден")
+            messages = []
+            engine._log_callback = messages.append
+            try:
+                action(engine)
+            finally:
+                engine._log_callback = None
+            return engine.redactor.messages({"order": _order_view(engine.order_store.read(order_id)), "message": " ".join(messages)})
+
+    @app.post("/api/orders/{order_id}/items/{index}/skip")
+    def skip_item(order_id: str, index: int, user=Depends(current_user)):
+        return _item_action(user, order_id, index, lambda engine: engine._skip_order_item(order_id, index))
+
+    @app.post("/api/orders/{order_id}/items/{index}/restore")
+    def restore_item(order_id: str, index: int, user=Depends(current_user)):
+        return _item_action(user, order_id, index, lambda engine: engine._restore_order_item(order_id, index))
+
+    @app.get("/api/orders/{order_id}/log")
+    def order_log(order_id: str, user=Depends(current_user)):
+        with Session() as session:
+            rows = session.query(db.SubmissionLog).filter_by(
+                organization_id=user["organization_id"], order_id=order_id).order_by(db.SubmissionLog.id)
+            return [{"created_at": r.created_at.isoformat(timespec="seconds"), "provider": r.provider,
+                     "brand": r.brand, "article": r.article, "quantity": r.quantity, "success": r.success,
+                     "response": (r.response or {}).get("response")} for r in rows]
+
+    @app.get("/api/jobs/{job_id}/events")
     @app.get("/api/search/{job_id}/events")
     async def events(job_id: str, user=Depends(current_user)):
         job = state["jobs"].get(job_id)

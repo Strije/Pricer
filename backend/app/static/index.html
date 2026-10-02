@@ -57,6 +57,11 @@
   td.name { white-space: normal; min-width: 220px; }
   tr.selected td { background: var(--best); font-weight: 600; }
   .an { color: var(--analog); font-weight: 700; font-size: 11px; margin-left: 4px; }
+  .st { font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .st.ok { background: var(--ok-soft); color: var(--ok); } .st.warn { background: var(--warn-soft); color: var(--warn); }
+  .st.bad { background: var(--bad-soft); color: var(--bad); } .st.muted { background: var(--bg); color: var(--muted); }
+  tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--accent-soft); }
+  td select { max-width: 280px; }
   .hide-purchase .purchase { display: none; }
   .hidden { display: none !important; }
   .auth { max-width: 380px; margin: 48px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
@@ -107,6 +112,8 @@
 <main class="hidden" id="app">
   <nav class="tabs">
     <button class="tab active" data-tab="search">Поиск</button>
+    <button class="tab" data-tab="file">Заказ из файла</button>
+    <button class="tab" data-tab="orders">Заказы</button>
     <button class="tab" data-tab="suppliers">Поставщики</button>
   </nav>
   <section id="tab-search">
@@ -145,6 +152,68 @@
       <tbody id="rows"></tbody>
     </table>
   </div>
+  </section>
+  <section id="tab-file" class="hidden">
+    <div class="panel">
+      <div class="row">
+        <strong>Файл заказа</strong>
+        <input type="file" id="of-file" accept=".csv,.txt,.xlsx,.xlsm">
+        <button class="secondary" id="of-load">Загрузить</button>
+        <span class="note">CSV или Excel: бренд, артикул, наименование, количество</span>
+      </div>
+      <div class="msg" id="of-msg"></div>
+      <div class="row" id="of-options" hidden>
+        <label class="check"><input type="checkbox" id="of-analogs"> с аналогами</label>
+        <label class="check"><input type="checkbox" id="of-noreturn"> разрешить без возврата</label>
+        <select id="of-strategy"><option value="price">Минимальная цена</option><option value="fastest">Минимальный срок</option></select>
+        <button id="of-search">Подобрать</button>
+        <span class="muted" id="of-progress"></span>
+      </div>
+    </div>
+    <div class="table-wrap" id="of-wrap" hidden>
+      <table>
+        <thead><tr><th><input type="checkbox" id="of-all" checked></th><th>№</th><th>Бренд</th><th>Артикул</th><th>Наименование</th>
+          <th class="num">Кол-во</th><th>Статус</th><th>Вариант</th><th class="num purchase">Закупка</th><th class="num">Продажа</th></tr></thead>
+        <tbody id="of-rows"></tbody>
+      </table>
+    </div>
+    <form class="panel row" id="of-order" hidden style="margin-top:14px">
+      <label>Клиент <input id="of-client" required></label>
+      <label>Менеджер <input id="of-manager"></label>
+      <label>Дата отгрузки <input id="of-date" type="date"></label>
+      <label>VIN <input id="of-vin" maxlength="30"></label>
+      <label style="flex:1 1 200px">Комментарий <input id="of-comment"></label>
+      <button>Создать заказ</button>
+      <span class="msg" id="of-order-msg"></span>
+    </form>
+  </section>
+  <section id="tab-orders" class="hidden">
+    <div class="table-wrap" id="ord-list-wrap">
+      <table>
+        <thead><tr><th>Заказ</th><th>Создан</th><th>Клиент</th><th class="num">Позиций</th><th class="num purchase">Закупка</th>
+          <th class="num">Продажа</th><th>Статус</th><th>Проверка</th></tr></thead>
+        <tbody id="ord-rows"></tbody>
+      </table>
+    </div>
+    <div class="panel hidden" id="ord-detail" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between">
+        <h2 id="ord-title" style="margin:0;font-size:16px"></h2>
+        <div class="row">
+          <button class="secondary" id="ord-recheck">Перепроверить</button>
+          <button id="ord-submit">Отправить поставщикам</button>
+        </div>
+      </div>
+      <div class="note" id="ord-info"></div>
+      <div class="msg" id="ord-msg"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Поставщик</th><th>Бренд</th><th>Артикул</th><th>Наименование</th><th class="num">Кол-во</th>
+            <th class="num purchase">Закупка</th><th class="num">Продажа</th><th>Проверка</th><th>Отправка</th><th>Ответ поставщика</th><th></th></tr></thead>
+          <tbody id="ord-items"></tbody>
+        </table>
+      </div>
+      <details style="margin-top:10px"><summary class="note">Журнал отправок</summary><div id="ord-log" class="note"></div></details>
+    </div>
   </section>
   <section id="tab-suppliers" class="hidden">
     <div class="panel">
@@ -233,9 +302,9 @@ $("auth-form").addEventListener("submit", async (e) => {
 $("logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}).catch(() => {}); showAuth(); };
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  $("tab-search").classList.toggle("hidden", t.dataset.tab !== "search");
-  $("tab-suppliers").classList.toggle("hidden", t.dataset.tab !== "suppliers");
+  for (const name of ["search", "file", "orders", "suppliers"]) $("tab-" + name).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "suppliers") loadSuppliers();
+  if (t.dataset.tab === "orders") loadOrders();
 });
 
 async function loadSuppliers() {
@@ -344,6 +413,148 @@ function render(res, seconds) {
     </tr>`).join("");
   $("wrap").hidden = rows.length === 0;
 }
+
+// ---------- общие помощники для фоновых задач ----------
+function listenJob(jobId, handlers) {
+  return new Promise((resolve) => {
+    const es = new EventSource(`/api/jobs/${jobId}/events`);
+    for (const [kind, fn] of Object.entries(handlers)) es.addEventListener(kind, (ev) => fn(JSON.parse(ev.data)));
+    const finish = (kind) => (ev) => { es.close(); resolve({kind, data: ev.data ? JSON.parse(ev.data) : {message: "соединение прервано"}}); };
+    es.addEventListener("done", finish("done")); es.addEventListener("error", finish("error"));
+  });
+}
+const SUBMIT = {not_submitted: ["не отправлена", "muted"], submitted: ["отправлена", "ok"], failed: ["ошибка", "bad"],
+  unknown: ["без подтверждения", "warn"], skipped: ["пропущена", "muted"]};
+const VERIFY = {valid: ["проверено", "ok"], stale: ["устарело", "warn"], checking: ["проверяется", "warn"],
+  failed: ["не прошла", "bad"], submitted: ["отправлен", "ok"]};
+const ORDER = {draft: ["черновик", "muted"], sent: ["отправлен", "ok"], partial: ["частично отправлен", "warn"],
+  failed: ["не отправлен — ошибки", "bad"], unknown: ["нужна проверка у поставщика", "warn"], processed: ["обработан", "ok"]};
+const badge = (map, v) => { const [t, c] = map[v] || [v || "—", "muted"]; return `<span class="st ${c}">${esc(t)}</span>`; };
+
+// ---------- заказ из файла ----------
+let ofRows = [], ofJob = null, ofResults = [];
+$("of-load").onclick = async () => {
+  const file = $("of-file").files[0];
+  if (!file) { $("of-msg").textContent = "Выберите файл"; return; }
+  const fd = new FormData(); fd.append("file", file);
+  try {
+    const r = await api("/api/order-file/parse", {method: "POST", body: fd});
+    ofRows = r.rows; ofResults = []; ofJob = null;
+    $("of-msg").className = "msg ok";
+    $("of-msg").textContent = `Строк: ${r.rows.length}` + (r.errors.length ? `, замечаний: ${r.errors.length} (${r.errors.slice(0, 3).join("; ")})` : "");
+    $("of-options").hidden = !r.rows.length; renderFileRows(); $("of-order").hidden = true;
+  } catch (err) { $("of-msg").className = "msg"; $("of-msg").textContent = err.message; }
+};
+function variantLabel(o) { return `${o.provider} · ${money(o.price)} → ${money(o.sale_price)} · ${days(o.delivery_hours)}${o.is_cross ? " · АН" : ""}`; }
+function renderFileRows() {
+  $("of-wrap").hidden = !ofRows.length;
+  $("of-rows").innerHTML = ofRows.map((row, i) => {
+    const r = ofResults[i];
+    const ready = r && r.offer;
+    const options = ready ? r.alternatives.map((a) => `<option value="${esc(a.internal_offer_id)}" ${a.internal_offer_id === r.offer.internal_offer_id ? "selected" : ""}>${esc(variantLabel(a))}</option>`).join("") : "";
+    const status = r ? `<span class="st ${r.status_code === "ready" ? "ok" : "warn"}" title="${esc(r.reason || "")}">${esc(r.status)}</span>` : (ofJob ? '<span class="st muted">ждёт</span>' : "");
+    return `<tr><td><input type="checkbox" data-row="${i}" ${ready ? "checked" : "disabled"}></td><td>${i + 1}</td>
+      <td>${esc(row.brand)}</td><td>${esc(row.article)}</td><td class="name">${esc(row.name)}</td><td class="num">${row.quantity}</td>
+      <td>${status}</td><td>${ready ? `<select data-variant="${i}">${options}</select>` : ""}</td>
+      <td class="num purchase">${ready ? money(r.offer.price) : ""}</td><td class="num">${ready ? money(r.offer.sale_price) : ""}</td></tr>`;
+  }).join("");
+  document.querySelectorAll("[data-variant]").forEach((sel) => sel.onchange = () => {
+    const i = Number(sel.dataset.variant), r = ofResults[i];
+    r.offer = r.alternatives.find((a) => a.internal_offer_id === sel.value) || r.offer; r.chosen = sel.value; renderFileRows();
+  });
+}
+$("of-all").onchange = () => document.querySelectorAll("[data-row]:not(:disabled)").forEach((c) => c.checked = $("of-all").checked);
+$("of-search").onclick = async () => {
+  $("of-search").disabled = true; ofResults = []; $("of-order").hidden = true;
+  try {
+    const r = await api("/api/order-file/search", {method: "POST", body: {rows: ofRows, with_analogs: $("of-analogs").checked,
+      include_no_return: $("of-noreturn").checked, strategy: $("of-strategy").value}});
+    ofJob = r.job_id; renderFileRows(); $("of-progress").textContent = `0 / ${r.total}`;
+    const end = await listenJob(r.job_id, {row: (row) => { ofResults[row.index] = row; $("of-progress").textContent = `${ofResults.filter(Boolean).length} / ${r.total}`; renderFileRows(); }});
+    $("of-progress").textContent = end.kind === "done" ? `Готово: ${end.data.ready} из ${end.data.total}` : "Ошибка: " + end.data.message;
+    $("of-order").hidden = end.kind !== "done" || !end.data.ready;
+  } catch (err) { $("of-progress").textContent = "Ошибка: " + err.message; }
+  $("of-search").disabled = false;
+};
+$("of-order").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const rows = [...document.querySelectorAll("[data-row]:checked")].map((c) => Number(c.dataset.row));
+  const selections = {};
+  rows.forEach((i) => { if (ofResults[i] && ofResults[i].chosen) selections[i] = ofResults[i].chosen; });
+  try {
+    const r = await api("/api/orders", {method: "POST", body: {job_id: ofJob, rows, selections, client: $("of-client").value.trim(),
+      manager: $("of-manager").value.trim(), ship_date: $("of-date").value, vin: $("of-vin").value.trim(), comment: $("of-comment").value.trim()}});
+    $("of-order-msg").className = "msg ok"; $("of-order-msg").textContent = `Создан ${r.order.order_id}` + (r.warnings.length ? `, пропущено: ${r.warnings.length}` : "");
+    document.querySelector('[data-tab="orders"]').click(); openOrder(r.order.order_id);
+  } catch (err) { $("of-order-msg").className = "msg"; $("of-order-msg").textContent = err.message; }
+});
+
+// ---------- заказы ----------
+let currentOrder = null;
+async function loadOrders() {
+  const list = await api("/api/orders");
+  $("ord-rows").innerHTML = list.length ? list.map((o) => `<tr class="clickable" data-order="${esc(o.order_id)}">
+    <td><strong>${esc(o.order_id)}</strong>${o.unknown_count ? ` <span class="st warn">без подтверждения: ${o.unknown_count}</span>` : ""}</td>
+    <td>${esc((o.created_at || "").replace("T", " ").slice(0, 16))}</td><td>${esc((o.client || {}).name || "")}</td>
+    <td class="num">${o.items_count}</td><td class="num purchase">${money((o.totals || {}).purchase_total)}</td>
+    <td class="num">${money((o.totals || {}).sale_total)}</td><td>${badge(ORDER, o.status)}</td><td>${badge(VERIFY, o.verification_status)}</td></tr>`).join("")
+    : '<tr><td colspan="8" class="muted">Заказов пока нет — создайте из файла</td></tr>';
+  document.querySelectorAll("[data-order]").forEach((tr) => tr.onclick = () => openOrder(tr.dataset.order));
+}
+async function openOrder(orderId) {
+  const order = await api(`/api/orders/${encodeURIComponent(orderId)}`);
+  renderOrder(order); $("ord-msg").textContent = "";
+  const log = await api(`/api/orders/${encodeURIComponent(orderId)}/log`);
+  $("ord-log").innerHTML = log.length ? log.map((r) => `${esc(r.created_at.replace("T", " "))} · ${esc(r.provider)} · ${esc(r.brand)} ${esc(r.article)} × ${r.quantity} · ${r.success ? "принято" : "не принято"} · ${esc(JSON.stringify(r.response || {}).slice(0, 160))}`).join("<br>") : "отправок не было";
+}
+function renderOrder(order) {
+  currentOrder = order; $("ord-detail").classList.remove("hidden");
+  const t = order.totals || {}, c = order.client || {};
+  $("ord-title").innerHTML = `${esc(order.order_id)} ${badge(ORDER, order.status)} ${badge(VERIFY, order.verification_status)}`;
+  $("ord-info").textContent = `Клиент: ${c.name || "—"}${c.vin ? " · VIN " + c.vin : ""} · менеджер: ${(order.manager || {}).name || "—"} · готовность: ${order.calculated_ready_date || "—"} · продажа ${money(t.sale_total)} ₽, маржа ${money(t.margin)} ₽`;
+  $("ord-items").innerHTML = (order.items || []).map((it, i) => {
+    const resp = it.supplier_response ? (it.supplier_response.error || it.supplier_response.message || it.supplier_response.data || "") : "";
+    const canSkip = !["submitted", "skipped", "unknown"].includes(it.submit_status);
+    return `<tr><td>${esc(it.provider)}</td><td>${esc(it.display_brand || it.brand)}</td><td>${esc(it.article)}</td><td class="name">${esc(it.name)}</td>
+      <td class="num">${it.quantity}</td><td class="num purchase">${money(it.purchase_price)}</td><td class="num">${money(it.sale_price)}</td>
+      <td>${badge(VERIFY, it.verification_status)}${it.verification_message ? `<div class="note">${esc(it.verification_message)}</div>` : ""}</td>
+      <td>${badge(SUBMIT, it.submit_status)}${it.submit_unknown_reason ? `<div class="note">${esc(it.submit_unknown_reason)}</div>` : ""}</td>
+      <td class="name note">${esc(String(resp).slice(0, 160))}</td>
+      <td>${canSkip ? `<button class="link" data-skip="${i}">пропустить</button>` : it.submit_status === "skipped" ? `<button class="link" data-restore="${i}">вернуть</button>` : ""}</td></tr>`;
+  }).join("");
+  document.querySelectorAll("[data-skip]").forEach((b) => b.onclick = () => itemAction(b.dataset.skip, "skip"));
+  document.querySelectorAll("[data-restore]").forEach((b) => b.onclick = () => itemAction(b.dataset.restore, "restore"));
+  $("ord-submit").disabled = order.status === "sent";
+}
+async function itemAction(index, action) {
+  try { const r = await api(`/api/orders/${encodeURIComponent(currentOrder.order_id)}/items/${index}/${action}`, {method: "POST"}); renderOrder(r.order); loadOrders(); }
+  catch (err) { $("ord-msg").textContent = err.message; }
+}
+$("ord-recheck").onclick = async () => {
+  const id = currentOrder.order_id; $("ord-recheck").disabled = true; $("ord-msg").className = "msg"; $("ord-msg").textContent = "Перепроверяю цены и наличие…";
+  try {
+    const r = await api(`/api/orders/${encodeURIComponent(id)}/recheck`, {method: "POST", body: {}});
+    const end = await listenJob(r.job_id, {});
+    if (end.kind === "done") { renderOrder(end.data.order); $("ord-msg").className = "msg ok"; $("ord-msg").textContent = "Перепроверка завершена"; }
+    else $("ord-msg").textContent = end.data.message;
+  } catch (err) { $("ord-msg").textContent = err.message; }
+  $("ord-recheck").disabled = false; loadOrders();
+};
+$("ord-submit").onclick = async () => {
+  const id = currentOrder.order_id; $("ord-msg").className = "msg";
+  try {
+    const p = await api(`/api/orders/${encodeURIComponent(id)}/submit-preview`);
+    const text = `Отправить поставщикам ${p.items} поз., ${p.quantity} шт. на ${money(p.purchase_total)} ₽?\nПоставщики: ${p.providers.join(", ")}` +
+      (p.problems ? `\nПроблемные позиции останутся в заказе: ${p.problems}` : "");
+    if (!confirm(text)) return;
+    $("ord-submit").disabled = true; $("ord-msg").textContent = "Отправляю…";
+    const r = await api(`/api/orders/${encodeURIComponent(id)}/submit`, {method: "POST", body: {confirm: true}});
+    const end = await listenJob(r.job_id, {});
+    if (end.kind === "done") { renderOrder(end.data.order); $("ord-msg").className = "msg ok"; $("ord-msg").textContent = end.data.message || "Отправка завершена"; openOrder(id); }
+    else $("ord-msg").textContent = end.data.message;
+  } catch (err) { $("ord-msg").textContent = err.message; }
+  $("ord-submit").disabled = currentOrder && currentOrder.status === "sent"; loadOrders();
+};
 </script>
 </body>
 </html>

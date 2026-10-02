@@ -1,12 +1,23 @@
 import ast, re, subprocess, sys
-S = sys.argv[1]; OUT = sys.argv[2]
+S = sys.argv[1]; OUT = sys.argv[2]  # S — папка, где лежит src/main.py и callgraph.py
 src = open(f"{S}/src/main.py", encoding="utf-8").read(); L = src.split("\n")
 tree = ast.parse(src)
 cls = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SkitchenApp"][0]
 methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
-graph = subprocess.run([sys.executable, f"{S}/callgraph.py", f"{S}/src/main.py", "_search_order_file_row",
-                        "_parse_filter_list", "_parse_warehouse_days"], capture_output=True, text=True).stdout
+ROOTS = [
+    "_search_order_file_row", "_parse_filter_list", "_parse_warehouse_days",
+    # заказы: черновик из файла, перепроверка, отправка, ручные действия с позицией
+    "_prepared_order_file_entry", "_order_entries_with_prices", "_entries_verified_at",
+    "_recheck_order_thread", "_submit_order_thread_guarded", "_submittable_order_items",
+    "_mark_order_stale_if_expired", "_order_submit_idempotency_key", "_try_lock_order_submit",
+    "_skip_order_item", "_restore_order_item", "_replace_order_item_with_variant",
+]
+# Методы интерфейса: вместо них в движке свои реализации (см. шапку класса ниже).
+UI_METHODS = {"add_log", "_refresh_orders_page", "_refresh_article_suggestion_orders"}
+graph = subprocess.run([sys.executable, f"{S}/callgraph.py", f"{S}/src/main.py", *ROOTS],
+                       capture_output=True, text=True).stdout
 names = [l.split()[2] for l in graph.splitlines() if l.strip() and l.split()[0].isdigit()]
+names = [n for n in names if n not in UI_METHODS]
 def block(a, b): return "\n".join(L[a - 1:b])
 def top(name):
     n = [x for x in tree.body if getattr(x, "name", None) == name or
@@ -23,6 +34,12 @@ for m in sorted(set(names), key=lambda m: methods[m].lineno):
     copied.append(block(n.lineno, n.end_lineno))
 body = "\n\n".join(copied)
 body = body.replace("self.log_signal.emit(", "self._log(")
+body = body.replace("self.order_action_finished.emit(", "self._order_action_finished(")
+# Исправление ошибки десктопа 1.0.3: в _apply_variant_to_order_item нет переменной offer
+# (NameError при замене варианта позиции в заказе). Имя берём у нового варианта, иначе прежнее.
+_bug = '"name": str(offer.get("name") or offer.get("source_name") or ""),'
+assert _bug in body, "исправление offer->variant больше не применимо, проверьте main.py"
+body = body.replace(_bug, '"name": str(variant.get("name") or variant.get("source_name") or order_item.get("name") or ""),')
 body = body.replace("if not self.markup_toggle.isChecked():", "if not self.markup_enabled:")
 out = f'''"""Движок поиска для заказа из файла, вынесенный из main.py (SkitchenApp) без Qt.
 
@@ -32,7 +49,8 @@ out = f'''"""Движок поиска для заказа из файла, вы
 - сигнал интерфейса log_signal.emit -> обратный вызов log;
 - флажок наценки в боковой панели -> атрибут markup_enabled;
 - настройка поставщиков из load_settings -> configure(settings).
-Сгенерировано скриптом из main.py; правки логики делаются уже здесь, с тестами.
+Сгенерировано скриптом tools/gen_engine.py из main.py: перегенерация перезаписывает файл, поэтому
+правки логики вносятся в генератор (как замены) или в main.py десктопа.
 """
 import datetime
 import math
@@ -52,6 +70,7 @@ from forum_auto import ForumAutoProvider
 from mikado import MikadoProvider
 from offer_normalizer import is_requested_part, normalize_offer
 from order_quantity import quantity_from_item
+from order_store import OrderStore
 from pr_lg import PrLgProvider
 from pricing import DEFAULT_MARKUP_RULES, calculate_sale_price
 from provider_adapter import ProviderAdapter
@@ -65,6 +84,12 @@ from url_csv_provider import UrlCsvProvider
 
 {top("PROVIDER_DISPLAY_NAMES")}
 
+{top("CROSS_RELATION_CODES")}
+{top("ORDER_VERIFICATION_TTL_SECONDS")}
+{top("ORDER_RECHECK_WORKERS")}
+{top("PROCESSED_SUBMIT_STATUSES")}
+{top("DRAFT_GROUP_OFFER_LIMIT")}
+
 
 {top("_abcp_supplier_configured")}
 
@@ -77,9 +102,25 @@ def default_settings():
     return default
 
 
+class _ProgressList(list):
+    """Список итогов по поставщикам, который сообщает о каждом новом итоге (для прогресса в вебе)."""
+
+    def __init__(self, callback=None):
+        super().__init__()
+        self._callback = callback
+
+    def append(self, item):
+        super().append(item)
+        if self._callback:
+            try:
+                self._callback(dict(item))
+            except Exception:
+                pass  # сбой показа прогресса не должен ломать поиск
+
+
 class ProcurementEngine:
     def __init__(self, settings=None, *, brand_aliases=None, cross_store=None, detailed_logger=None,
-                 log=None, providers=None):
+                 log=None, providers=None, order_store=None, order_history=None):
         self.settings = dict(settings or default_settings())
         self.brand_aliases = brand_aliases or BrandAliasResolver()
         self.cross_store = cross_store
@@ -89,6 +130,10 @@ class ProcurementEngine:
         self.provider_circuit = ProviderCircuitBreaker(threshold=5, cooldown_seconds=45)
         self._order_file_search_id = 0
         self._selected_brand_variants = {{}}
+        self.on_provider_progress = None
+        self.on_order_action = None
+        self.order_store = order_store
+        self.order_history = order_history
         self.configure(self.settings)
         if providers is not None:
             self.providers = list(providers)
@@ -96,6 +141,21 @@ class ProcurementEngine:
     def _log(self, text):
         if self._log_callback:
             self._log_callback(text)
+
+    # Заменители методов окна десктопа: лог, обновление страницы заказов, подсказки артикулов.
+    def add_log(self, text):
+        self._log(text)
+
+    def _refresh_orders_page(self):
+        pass
+
+    def _refresh_article_suggestion_orders(self, orders):
+        pass
+
+    def _order_action_finished(self, order, message):
+        self._log(message)
+        if self.on_order_action:
+            self.on_order_action(order, message)
 
     def search_order_row(self, row, options=None):
         """Подбор одной строки заказа: то же, что кнопка «Файл заказа» в десктопе."""
@@ -108,6 +168,8 @@ class ProcurementEngine:
         self.markup_enabled = bool(self.markup_rules) or float(self.current_markup or 0) > 0
 
 '''
+body = body.replace("        provider_stats = []\n",
+                    "        provider_stats = _ProgressList(getattr(self, \"on_provider_progress\", None))\n", 1)
 out += "\n".join(("" if not l.strip() else l) for l in body.split("\n")) + "\n"
 open(OUT, "w", encoding="utf-8").write(out)
 print("methods", len(set(names)))
