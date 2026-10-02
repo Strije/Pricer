@@ -54,6 +54,7 @@ pick_python() {  # Python 3.11+ (на Ubuntu 22.04 по умолчанию 3.10 
 deploy_code() {
     local src
     src=$(mktemp -d)
+    echo "   … скачиваю код ($BRANCH)"
     git clone -q --depth 1 -b "$BRANCH" "$REPO" "$src"
     mkdir -p "$DIR"
     # тесты и демо-записи на сервере не нужны
@@ -61,7 +62,15 @@ deploy_code() {
     rsync -a --delete "$src/deploy/" "$DIR/deploy/"
     (cd "$src" && git rev-parse --short HEAD) > "$DIR/VERSION"
     rm -rf "$src"
-    [ -x "$DIR/venv/bin/python" ] || "$(pick_python)" -m venv "$DIR/venv"
+    if [ ! -x "$DIR/venv/bin/python" ]; then
+        local py
+        py=$(pick_python)
+        # на Ubuntu/Debian модуль venv — отдельный пакет python3.X-venv
+        "$py" -m venv "$DIR/venv" 2>/dev/null || {
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$("$py" -c 'import sys; print("python%d.%d-venv" % sys.version_info[:2])')" >/dev/null
+            rm -rf "$DIR/venv"; "$py" -m venv "$DIR/venv"; }
+    fi
+    echo "   … ставлю зависимости (2–5 минут, без вывода)"
     "$DIR/venv/bin/pip" install -q --upgrade pip
     "$DIR/venv/bin/pip" install -q -r "$DIR/backend/requirements.txt"
     chown -R root:root "$DIR"
