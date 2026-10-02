@@ -126,3 +126,95 @@ def test_helpers():
     assert prices.article_key("W 712/95") == "w71295"
     assert prices.location_hint("https://u:p@host.ru/a/b/price.csv?token=1") == "https://host.ru/…/price.csv"
     assert prices.guess_mapping(["Код", "Номер детали", "Бренд", "Цена, руб", "Кол-во"])["brand"] == "Бренд"
+
+
+def letter(sender, subject, filename, body, date="Fri, 02 Oct 2026 08:00:00 +0300", msg_id="<1@x>"):
+    from email.message import EmailMessage
+
+    m = EmailMessage()
+    m["From"], m["Subject"], m["Date"], m["Message-ID"] = sender, subject, date, msg_id
+    m.set_content("прайс во вложении")
+    m.add_attachment(body if isinstance(body, bytes) else body.encode("cp1251"), maintype="application",
+                     subtype="octet-stream", filename=filename)
+    return m.as_bytes()
+
+
+class FakeImap:
+    """imaplib.IMAP4_SSL: письма из списка, пароль — «good»."""
+    letters = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host = host
+
+    def login(self, user, password):
+        import imaplib
+        if password != "good":
+            raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+
+    def list(self):
+        return "OK", [b'(\\HasNoChildren) "|" "INBOX"', b'(\\HasNoChildren) "|" "Prices"']
+
+    def select(self, folder, readonly=False):
+        assert readonly  # ящик только читаем
+        return "OK", [b"1"]
+
+    def search(self, charset, *criteria):
+        return "OK", [" ".join(str(i + 1) for i in range(len(self.letters))).encode()]
+
+    def fetch(self, msg_id, what):
+        assert "PEEK" in what  # не помечаем прочитанным
+        return "OK", [(b"1", self.letters[int(msg_id) - 1])]
+
+    def logout(self):
+        pass
+
+
+def test_mail_prices(app_factory, monkeypatch):  # noqa: F811
+    import imaplib
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", FakeImap)
+    FakeImap.letters = [
+        letter("price@avtoformula.ru", "Прайс Автоформула", "af_price.csv", "Артикул;Производитель;Цена\nOC90;MAHLE;400\n", msg_id="<old@af>"),
+        letter("news@shop.ru", "Скидки", "price.csv", "Артикул;Цена\nX;1\n", msg_id="<spam@x>"),
+        letter("Автоформула <price@avtoformula.ru>", "Прайс Автоформула 02.10", "af_price.csv",
+               "Артикул;Производитель;Цена\nOC90;MAHLE;410\nW71295;MANN;300\n", msg_id="<new@af>"),
+    ]
+    make_client, _ = app_factory
+    client = register(make_client(), "mail@example.com", org="Почта")
+    box = client.post("/api/suppliers", headers=H, json={"section": "mailbox", "config": {"name": "Прайсы", "host": "imap.yandex.ru",
+                      "port": 993, "login": "prices@yandex.ru"}, "secrets": {"password": "bad"}}).json()
+    bad = client.post(f"/api/services/mailbox/{box['id']}/check", headers=H).json()
+    assert bad["ok"] is False and "пароль приложения" in bad["message"]
+    client.put(f"/api/suppliers/{box['id']}", headers=H, json={"config": {"name": "Прайсы", "host": "imap.yandex.ru", "port": 993,
+               "login": "prices@yandex.ru"}, "secrets": {"password": "good"}})
+    ok = client.post(f"/api/services/mailbox/{box['id']}/check", headers=H).json()
+    assert ok["ok"] and ok["folders"] == ["INBOX", "Prices"]
+
+    src = client.post("/api/prices", headers=H, json={"name": "Прайс Автоформула", "kind": "email", "settings": {"mail": {
+        "mailbox_id": box["id"], "folder": "INBOX", "sender": "avtoformula", "subject": "прайс", "filename": "af_", "max_age_days": 30}}}).json()
+    preview = client.post(f"/api/prices/{src['id']}/preview", headers=H).json()
+    assert preview["letter"]["message_id"] == "<new@af>" and preview["total"] == 2  # самое новое подходящее письмо
+    status = wait_load(client, src["id"])
+    assert status["ok"] and status["rows"] == 2 and "af_price.csv" in status["message"]
+
+    from app import db
+    with client.app.state.pricer["Session"]() as session:  # фоновая проверка: то же письмо — не перезагружаем
+        from app import prices
+        row = session.get(db.PriceSource, src["id"])
+        again = prices.load(session, client.app.state.pricer["box"], row)
+    assert "новых писем нет" in again["message"]
+
+    FakeImap.letters.append(letter("price@avtoformula.ru", "Прайс Автоформула", "af_price.zip", _zip("Артикул;Цена\nOC90;399\n"), msg_id="<zip@af>"))
+    assert wait_load(client, src["id"])["rows"] == 1  # ZIP во вложении
+    FakeImap.letters.append(letter("price@avtoformula.ru", "Прайс Автоформула", "af_price.xls", b"\xd0\xcf\x11\xe0old", msg_id="<xls@af>"))
+    assert "XLS" in wait_load(client, src["id"])["message"]
+    nobox = client.post("/api/prices", headers=H, json={"name": "Без ящика", "kind": "email", "settings": {"mail": {}}}).json()
+    assert "почтовый ящик" in wait_load(client, nobox["id"])["message"]
+
+
+def _zip(text):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("p.csv", text)
+    return buf.getvalue()
+

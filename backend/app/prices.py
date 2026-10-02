@@ -67,6 +67,33 @@ def read_rows(location, source_settings, name="Прайс"):
     return provider, rows
 
 
+def read_bytes(content, filename, source_settings, name="Прайс"):
+    """Разбор файла, уже скачанного (вложение письма): как read_rows, но без загрузки по адресу."""
+    location = f"mail://{filename}"
+    provider = _provider(location, source_settings, name)
+    lower = str(filename or "").lower()
+    if lower.endswith(".xls") and not bytes(content[:2]) == b"PK":
+        raise RuntimeError("старый формат XLS не поддерживается — попросите поставщика присылать XLSX или CSV")
+    if lower.endswith(".rar"):
+        raise RuntimeError("архив RAR не поддерживается — попросите поставщика присылать ZIP")
+    data = bytes(content or b"")
+    if data.startswith(b"PK") and not lower.endswith(".xlsx"):
+        import io
+        import zipfile
+
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            inner = [n for n in archive.namelist() if not n.endswith("/")]
+            xlsx = [n for n in inner if n.lower().endswith(".xlsx")]
+            if xlsx and not any(n.lower().endswith((".csv", ".txt")) for n in inner):
+                return provider, location, provider._parse_xlsx(archive.read(xlsx[0]))
+    if lower.endswith(".xlsx"):
+        return provider, location, provider._parse_xlsx(data)
+    text = provider._decode_bytes(provider._unpack_content(data)).strip()
+    if not text:
+        raise RuntimeError("вложение пустое")
+    return provider, location, provider._parse_csv(text, provider._profile_for_url(location))
+
+
 def guess_mapping(headers):
     """Какая колонка за какое поле — по названиям заголовков, как угадывает десктоп."""
     def norm(value):
@@ -82,8 +109,9 @@ def guess_mapping(headers):
     return out
 
 
-def preview(location, source_settings, limit=20):
-    _, rows = read_rows(location, source_settings)
+def preview(location, source_settings, limit=20, rows=None):
+    if rows is None:
+        _, rows = read_rows(location, source_settings)
     headers = []
     for row in rows[:200]:
         for key in row:
@@ -112,14 +140,43 @@ def normalize(provider, rows, location, warehouse=""):
     return items, reasons
 
 
-def load(session, box, source):
-    """Загрузка одного источника: скачать, разобрать, заменить строки в базе, записать отчёт."""
+def mailbox_for(session, box, source):
+    mail = (source.settings or {}).get("mail") or {}
+    account = session.get(db.SupplierAccount, int(mail.get("mailbox_id") or 0)) if mail.get("mailbox_id") else None
+    if account is None or account.organization_id != source.organization_id or account.section != "mailbox":
+        raise RuntimeError("выберите почтовый ящик (Настройки → Сервисы → Почтовые ящики)")
+    return {**(account.config or {}), **box.open(account.secrets_sealed)}, mail
+
+
+def fetch_mail(session, box, source):
+    """(provider, location, rows, письмо) по правилу источника «почта»."""
+    from mail_prices import find_latest
+
+    mailbox, rule = mailbox_for(session, box, source)
+    content, filename, message_id, sent = find_latest(mailbox, rule)
+    provider, location, rows = read_bytes(content, filename, source.settings, source.name)
+    return provider, location, rows, {"message_id": message_id, "file": filename, "sent": sent}
+
+
+def load(session, box, source, force=False):
+    """Загрузка одного источника: скачать (или взять из письма), разобрать, заменить строки в базе, отчёт."""
     started = datetime.datetime.now()
-    location = box.open(source.location_sealed).get("location", "") if source.location_sealed else ""
+    letter = None
     try:
-        if not location:
-            raise RuntimeError("не указан адрес прайса")
-        provider, rows = read_rows(location, source.settings, source.name)
+        if source.kind == "email":
+            provider, location, rows, letter = fetch_mail(session, box, source)
+            previous = source.status or {}
+            if not force and previous.get("ok") and previous.get("message_id") == letter["message_id"] and source.loaded_at:
+                # то же письмо, что в прошлый раз: строки на месте, свежесть — по дате того письма
+                source.status = {**previous, "checked_at": db.utcnow().isoformat(timespec="seconds"),
+                                 "message": previous.get("message", "") .split(" · новых писем нет")[0] + " · новых писем нет"}
+                session.commit()
+                return source.status
+        else:
+            location = box.open(source.location_sealed).get("location", "") if source.location_sealed else ""
+            if not location:
+                raise RuntimeError("не указан адрес прайса")
+            provider, rows = read_rows(location, source.settings, source.name)
         items, reasons = normalize(provider, rows, location, (source.settings or {}).get("warehouse", ""))
         if rows and not items:
             raise RuntimeError("ни одной строки не разобрано — проверьте колонки (артикул и цена)")
@@ -132,6 +189,9 @@ def load(session, box, source):
         source.loaded_at = db.utcnow()
         status = {"ok": True, "rows": len(items), "skipped": sum(reasons.values()), "reasons": reasons,
                   "message": f"загружено {len(items)} строк" + (f", пропущено {sum(reasons.values())}" if reasons else "")}
+        if letter:
+            status.update(letter)
+            status["message"] += f" · письмо {letter['sent'][:16].replace('T', ' ')}, файл {letter['file']}"
     except Exception as exc:
         status = {"ok": False, "message": str(exc)[:300]}
     status["at"] = db.utcnow().isoformat(timespec="seconds")

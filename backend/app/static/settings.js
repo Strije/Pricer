@@ -21,7 +21,8 @@
   window.loadServices = async function () {
     try { accounts = await api("/api/suppliers"); } catch (e) { accounts = []; }
     const yk = accounts.find((a) => a.section === "yookassa"), lx = accounts.find((a) => a.section === "laximo");
-    $("services-box").innerHTML = yooCard(yk) + laximoCard(lx);
+    $("services-box").innerHTML = yooCard(yk) + laximoCard(lx) + mailCard(accounts.filter((a) => a.section === "mailbox"));
+    bindMail();
     bind("yookassa", yk, yooForm);
     bind("laximo", lx, () => ({config: {enabled: $("lx-enabled").checked}, secrets: secretValues({login: "lx-login", password: "lx-password"})}));
     if (yk) {
@@ -81,6 +82,50 @@
       ${st.message ? `<div class="${st.ok ? "note" : "acc-msg"}" style="margin-top:6px">${esc(st.message)}</div>` : ""}
       <div class="row" style="margin-top:10px"><button>Сохранить</button><button type="button" class="secondary" data-check>Проверить подключение</button><span class="msg"></span></div></form>`;
   }
+  // ---------- почтовые ящики (прайсы из писем) ----------
+  function mailCard(boxes) {
+    return `<div class="card svc"><div class="row" style="justify-content:space-between"><h3>Почтовые ящики</h3>
+        <button type="button" class="secondary small" id="mb-add">+ Ящик Яндекс</button></div>
+      <div class="note">Для прайсов, которые поставщики присылают письмом. Яндекс: в настройках почты включите IMAP
+        и создайте <strong>пароль приложения</strong> (обычный пароль не подойдёт). Письма только читаются — не удаляются и не помечаются.</div>
+      ${boxes.map((b) => `<form class="q-line" data-mb="${b.id}">
+        <div class="row" style="justify-content:space-between"><strong>${esc(b.config.name || b.config.login || "Ящик")}</strong>${status(b)}</div>
+        <label>Название<input data-k="name" value="${esc(b.config.name || "")}"></label>
+        <label>Адрес почты (логин)<input data-k="login" value="${esc(b.config.login || "")}" autocomplete="off"></label>
+        ${secretInput(b, "password", "mb-pass-" + b.id, "Пароль приложения")}
+        <div class="row"><label style="flex:1">Сервер IMAP<input data-k="host" value="${esc(b.config.host || "imap.yandex.ru")}"></label>
+          <label style="width:90px">Порт<input data-k="port" type="number" value="${esc(b.config.port || 993)}"></label></div>
+        ${(b.status || {}).message ? `<div class="${b.status.ok ? "note" : "acc-msg"}">${esc(b.status.message)}</div>` : ""}
+        <div class="row" style="margin-top:8px"><button>Сохранить</button><button type="button" class="secondary" data-mb-check>Проверить вход</button>
+          <button type="button" class="danger" data-mb-del>Удалить</button><span class="msg"></span></div></form>`).join("")
+        || '<p class="note">Ящиков нет.</p>'}</div>`;
+  }
+  function bindMail() {
+    $("mb-add").onclick = async () => {
+      await api("/api/suppliers", {method: "POST", body: {section: "mailbox", config: {name: "Прайсы", host: "imap.yandex.ru", port: 993}}});
+      loadServices();
+    };
+    document.querySelectorAll("[data-mb]").forEach((form) => {
+      const id = form.dataset.mb, msg = form.querySelector(".msg");
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const config = {};
+        form.querySelectorAll("[data-k]").forEach((el) => config[el.dataset.k] = el.dataset.k === "port" ? Number(el.value) || 993 : el.value.trim());
+        try { await api(`/api/suppliers/${id}`, {method: "PUT", body: {config, secrets: secretValues({password: "mb-pass-" + id})}}); loadServices(); }
+        catch (err) { msg.className = "msg"; msg.textContent = err.message; }
+      };
+      form.querySelector("[data-mb-check]").onclick = async (e) => {
+        e.target.disabled = true; e.target.textContent = "Проверяю…";
+        try { await api(`/api/services/mailbox/${id}/check`, {method: "POST"}); } catch (err) {}
+        loadServices();
+      };
+      form.querySelector("[data-mb-del]").onclick = async () => {
+        if (!confirm("Удалить почтовый ящик?")) return;
+        await api(`/api/suppliers/${id}`, {method: "DELETE"}); loadServices();
+      };
+    });
+  }
+
   function bind(section, acc, collect) {
     const connect = document.querySelector(`[data-connect="${section}"]`);
     if (connect) connect.onclick = async () => { await api("/api/suppliers", {method: "POST", body: {section}}); loadServices(); };
@@ -100,13 +145,14 @@
   }
 
   // ---------- прайс-листы ----------
-  const P = {data: null, q: "", filter: ""};
+  const P = {data: null, q: "", filter: "", mailboxes: []};
   const STATE = {ok: ["загружен", "ok"], warn: ["давно не обновлялся", "warn"], stale: ["устарел — не в выдаче", "bad"],
     bad: ["ошибка", "bad"], new: ["ещё не загружался", "muted"], off: ["выключен", "muted"]};
   const HOURS = (h) => h % 24 === 0 ? (h === 24 ? "раз в сутки" : `раз в ${h / 24} дн.`) : (h === 1 ? "каждый час" : `каждые ${h} ч`);
 
   window.loadPrices = async function () {
     try { P.data = await api("/api/prices"); } catch (err) { $("prices-box").innerHTML = `<p class="msg">${esc(err.message)}</p>`; return; }
+    try { P.mailboxes = (await api("/api/suppliers")).filter((a) => a.section === "mailbox"); } catch (e) { P.mailboxes = []; }
     renderPrices();
   };
   function renderPrices() {
@@ -119,6 +165,7 @@
         <input id="pr-q" placeholder="Поиск прайса" value="${esc(P.q)}" style="flex:1 1 220px">
         <span class="seg" id="pr-filter">${[["", "Все"], ["ok", "Загружены"], ["bad", "Ошибки"], ["off", "Выключены"]].map(([v, t]) => `<button data-pf="${v}" class="${P.filter === v ? "on" : ""}">${t}</button>`).join("")}</span>
         <button class="secondary small" id="pr-add">+ Прайс по ссылке или FTP</button>
+        <button class="secondary small" id="pr-add-mail">+ Прайс с почты</button>
         <span class="note">${d.sources.length} прайсов · ${rows.toLocaleString("ru-RU")} строк в поиске</span>
       </div>
       <p class="note">Прайс не обновлялся ${d.warn_days} дня — предупреждение; дольше ${d.stale_days} дней — в выдачу не попадает.
@@ -128,6 +175,12 @@
     if (!d.sources.length) $("prices-list").innerHTML = '<p class="note">Прайсов нет. Добавьте по ссылке или FTP — или импортируйте settings.json десктопа во вкладке «Поставщики».</p>';
     $("pr-q").oninput = (e) => { P.q = e.target.value; renderPrices(); const el = $("pr-q"); el.focus(); el.setSelectionRange(P.q.length, P.q.length); };
     document.querySelectorAll("#pr-filter [data-pf]").forEach((b) => b.onclick = () => { P.filter = b.dataset.pf; renderPrices(); });
+    $("pr-add-mail").onclick = async () => {
+      const src = await api("/api/prices", {method: "POST", body: {name: "Новый прайс с почты", kind: "email",
+        settings: {mail: {mailbox_id: (P.mailboxes[0] || {}).id || null, folder: "INBOX", max_age_days: 7}}}});
+      P.data.sources.unshift(src); renderPrices();
+      const el = document.querySelector(`#prices-list details[data-id="${src.id}"]`); if (el) el.open = true;
+    };
     $("pr-add").onclick = async () => {
       const src = await api("/api/prices", {method: "POST", body: {name: "Новый прайс"}});
       P.data.sources.unshift(src); renderPrices();
@@ -140,15 +193,15 @@
     const when = src.loaded_at ? dt(src.loaded_at) : "";
     det.innerHTML = `<summary>
         <label class="switch" title="Включить или выключить"><input type="checkbox" data-en ${src.enabled ? "checked" : ""}><span></span></label>
-        <span class="acc-name"><strong>${esc(src.name)}</strong> <span class="note">${esc(src.location_hint || "адрес не указан")} · ${HOURS(src.schedule_hours)}</span>
+        <span class="acc-name"><strong>${esc(src.name)}</strong> <span class="note">${src.kind === "email" ? "📧 письмом" + ((set.mail || {}).sender ? " от «" + esc(set.mail.sender) + "»" : "") : esc(src.location_hint || "адрес не указан")} · ${HOURS(src.schedule_hours)}</span>
           ${st.ok === false && st.message ? `<span class="acc-msg">${esc(st.message)}</span>` : ""}</span>
         <span class="st ${cls}" title="${esc(st.message || "")}">${esc(label)}${src.state === "ok" || src.state === "warn" ? ` · ${(st.rows || 0).toLocaleString("ru-RU")} строк · ${when}` : ""}</span>
         <button type="button" class="secondary small" data-load>Загрузить</button>
       </summary>
       <form class="card acc-body">
         <label>Название в выдаче<input data-f="name" value="${esc(src.name)}"></label>
-        <label>Адрес (https://… или ftp://логин:пароль@сервер/путь/файл)
-          <input data-f="location" placeholder="${src.has_location ? "сохранён — оставьте пустым, чтобы не менять" : "https://…/price.csv"}" autocomplete="off"></label>
+        ${src.kind === "email" ? mailRule(set.mail || {}) : `<label>Адрес (https://… или ftp://логин:пароль@сервер/путь/файл)
+          <input data-f="location" placeholder="${src.has_location ? "сохранён — оставьте пустым, чтобы не менять" : "https://…/price.csv"}" autocomplete="off"></label>`}
         <label>Обновлять<select data-f="schedule_hours">${P.data.schedules.map((h) => `<option value="${h}"${h === src.schedule_hours ? " selected" : ""}>${HOURS(h)}</option>`).join("")}</select></label>
         <label>Срок поставки, если в прайсе нет (дней)<input data-s="default_days" value="${esc(set.default_days ?? "")}" placeholder="0"></label>
         <label>Склад, если в прайсе нет<input data-s="warehouse" value="${esc(set.warehouse || "")}"></label>
@@ -167,7 +220,12 @@
     form.onsubmit = async (e) => {
       e.preventDefault();
       const body = {name: form.querySelector('[data-f="name"]').value, schedule_hours: Number(form.querySelector('[data-f="schedule_hours"]').value), settings: {}};
-      const loc = form.querySelector('[data-f="location"]').value.trim(); if (loc) body.location = loc;
+      const locEl = form.querySelector('[data-f="location"]'); const loc = locEl ? locEl.value.trim() : ""; if (loc) body.location = loc;
+      if (src.kind === "email") {
+        const mail = {};
+        form.querySelectorAll("[data-m]").forEach((el) => mail[el.dataset.m] = ["mailbox_id", "max_age_days"].includes(el.dataset.m) ? Number(el.value) || null : el.value.trim());
+        body.settings.mail = mail;
+      }
       form.querySelectorAll("[data-s]").forEach((el) => { body.settings[el.dataset.s] = el.dataset.s === "has_header" ? ({auto: "auto", true: true, false: false})[el.value] : el.value.trim(); });
       try { await save(src, body); msg.className = "msg ok"; msg.textContent = "Сохранено"; } catch (err) { msg.className = "msg"; msg.textContent = err.message; }
     };
@@ -177,6 +235,17 @@
     };
     det.querySelector("[data-preview]").onclick = () => showPreview(src, det.querySelector("[data-preview-box]"), msg);
     return det;
+  }
+  function mailRule(m) {
+    const boxes = P.mailboxes || [];
+    return `<label>Почтовый ящик<select data-m="mailbox_id">${boxes.map((b) => `<option value="${b.id}"${String(b.id) === String(m.mailbox_id) ? " selected" : ""}>${esc(b.config.name || b.config.login)}</option>`).join("")
+        || '<option value="">— добавьте ящик в «Сервисах» —</option>'}</select></label>
+      <label>Папка<input data-m="folder" value="${esc(m.folder || "INBOX")}" placeholder="INBOX"></label>
+      <label>Отправитель содержит<input data-m="sender" value="${esc(m.sender || "")}" placeholder="avtoformula"></label>
+      <label>Тема содержит<input data-m="subject" value="${esc(m.subject || "")}" placeholder="прайс"></label>
+      <label>Имя файла вложения содержит<input data-m="filename" value="${esc(m.filename || "")}" placeholder="price"></label>
+      <label>Письма не старше, дней<input data-m="max_age_days" type="number" min="1" value="${esc(m.max_age_days || 7)}"></label>
+      <div class="note">Берётся самое новое подходящее письмо; то же письмо второй раз не загружается. Свежесть прайса — по дате письма.</div>`;
   }
   async function save(src, body) {
     const fresh = await api(`/api/prices/${src.id}`, {method: "PUT", body});

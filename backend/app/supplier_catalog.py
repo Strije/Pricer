@@ -86,6 +86,13 @@ CATALOG = {
                    ("payment_subject", "Признак предмета расчёта (commodity — товар)", "text"),
                    ("payment_mode", "Признак способа расчёта (full_prepayment — полная предоплата)", "text")],
     },
+    "mailbox": {
+        "title": "Почтовый ящик для прайсов (IMAP)",
+        "service": True,
+        "multiple": True,
+        "fields": [("name", "Название", "text"), ("host", "Сервер IMAP", "text"), ("port", "Порт", "int"),
+                   ("login", "Адрес почты (логин)", "text"), ("password", "Пароль приложения", "secret")],
+    },
     "url_csv": {
         "title": "Прайс-листы по ссылкам",
         # Адреса прайсов часто содержат логин и пароль FTP или токен, поэтому они секретные.

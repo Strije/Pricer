@@ -511,7 +511,7 @@ def create_app(var_dir=None, database_url=None):
     from starlette.middleware.gzip import GZipMiddleware
 
     app.add_middleware(GZipMiddleware, minimum_size=2000)  # поток событий (SSE) не сжимается
-    app.state.pricer = {"state": state, "engine_for": engine_for, "Session": Session}  # для тестов
+    app.state.pricer = {"state": state, "engine_for": engine_for, "Session": Session, "box": box}  # для тестов
 
     @app.middleware("http")
     async def csrf_guard(request: Request, call_next):
@@ -697,6 +697,29 @@ def create_app(var_dir=None, database_url=None):
         with Session() as session:
             account = session.query(db.SupplierAccount).filter_by(organization_id=user["organization_id"], section=section).first()
             account.status = {k: status[k] for k in ("ok", "message", "seconds", "at")}
+            session.commit()
+        return status
+
+    @app.post("/api/services/mailbox/{account_id}/check")
+    def check_mailbox(account_id: int, user=Depends(admin_user)):
+        """Почтовый ящик: вход по IMAP и список папок (письма не читаются и не меняются)."""
+        from mail_prices import MailError, folders
+
+        with Session() as session:
+            account = session.get(db.SupplierAccount, account_id)
+            if account is None or account.organization_id != user["organization_id"] or account.section != "mailbox":
+                raise HTTPException(status_code=404, detail="ящик не найден")
+            cfg = {**(account.config or {}), **box.open(account.secrets_sealed)}
+        try:
+            names = folders(cfg)
+            status = {"ok": True, "message": f"вход выполнен · папок: {len(names)}", "folders": names[:50]}
+        except MailError as exc:
+            status = {"ok": False, "message": str(exc)}
+        status["message"] = Redactor([cfg.get("password") or ""]).text(status["message"])[:300]
+        status["at"] = db.utcnow().isoformat(timespec="seconds")
+        with Session() as session:
+            account = session.get(db.SupplierAccount, account_id)
+            account.status = {k: status[k] for k in ("ok", "message", "at")}
             session.commit()
         return status
 
@@ -1049,7 +1072,7 @@ def create_app(var_dir=None, database_url=None):
                 setattr(source, field, value.strip() if isinstance(value, str) else value)
         if request.location:
             location = request.location.strip()
-            if not re.match(r"(?i)^(https?|ftp)://", location) and source.kind != "email":
+            if not re.match(r"(?i)^(https?|ftp)://", location):
                 raise HTTPException(status_code=400, detail="адрес прайса начинается с https://, http:// или ftp://")
             source.location_sealed = box.seal({"location": location})
             source.location_hint = price_service.location_hint(location)
@@ -1096,6 +1119,12 @@ def create_app(var_dir=None, database_url=None):
             location = box.open(source.location_sealed).get("location", "") if source.location_sealed else ""
             settings = dict(source.settings or {})
             secrets_list = [location]
+            if source.kind == "email":
+                try:
+                    _, _, rows, letter = price_service.fetch_mail(session, box, source)
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)[:300])
+                return {**price_service.preview("", settings, rows=rows), "letter": letter}
         if not location:
             raise HTTPException(status_code=400, detail="сначала укажите адрес прайса")
         try:
@@ -1105,13 +1134,13 @@ def create_app(var_dir=None, database_url=None):
 
     price_lock = threading.Lock()  # загрузки прайсов — по одной: файлы бывают по сотне мегабайт
 
-    def load_price(source_id):
+    def load_price(source_id, force=False):
         with price_lock, Session() as session:
             source = session.get(db.PriceSource, source_id)
             if source is None:
                 return {}
             location = box.open(source.location_sealed).get("location", "") if source.location_sealed else ""
-            status = price_service.load(session, box, source)
+            status = price_service.load(session, box, source, force=force)
             if location and status.get("message"):
                 status["message"] = Redactor([location]).text(status["message"])
                 source.status = status
@@ -1126,7 +1155,7 @@ def create_app(var_dir=None, database_url=None):
         job = Job(None, user["organization_id"], kind="price")
 
         def work():
-            job.push("done", load_price(source_id))
+            job.push("done", load_price(source_id, force=True))  # вручную — и то же письмо загрузить заново
             job.done = True
         queued = price_lock.locked()  # идёт другая загрузка — эта начнётся следом
         state["jobs"][job.id] = job
