@@ -268,7 +268,7 @@
     const mapping = {...pv.guess, ...pv.mapping}, byHeader = {};
     for (const [field, header] of Object.entries(mapping)) byHeader[header] = field;
     const fields = P.data.fields;
-    box.innerHTML = `<p class="note">Строк в файле: ${pv.total.toLocaleString("ru-RU")}. Укажите, где какое поле (артикул и цена обязательны) — подобрано по заголовкам.</p>
+    box.innerHTML = `<p class="note">Строк в файле: ${pv.total_more ? "больше " : ""}${pv.total.toLocaleString("ru-RU")}. Укажите, где какое поле (артикул и цена обязательны) — подобрано по заголовкам.</p>
       <div class="table-wrap"><table><thead><tr>${pv.headers.map((h) => `<th><select data-col="${esc(h)}"><option value="">—</option>${fields.map((f) =>
         `<option value="${f.code}"${byHeader[h] === f.code ? " selected" : ""}>${esc(f.label)}${f.required ? " *" : ""}</option>`).join("")}</select><div class="note">${esc(h)}</div></th>`).join("")}</tr></thead>
         <tbody>${pv.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>

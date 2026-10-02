@@ -6,14 +6,18 @@
 Новое: строки — в базе с индексом «организация + артикул» вместо файлового кэша, у каждого
 источника своё расписание, разметка колонок вручную, отчёт загрузки, устаревание.
 """
+import csv
 import datetime
+import io
 import os
 import re
+import zipfile
 from urllib.parse import unquote, urlparse
 
 from sqlalchemy import delete, insert
 
 from app import db
+from price_names import humanize_price_name
 from url_csv_provider import UrlCsvProvider
 
 # Поля строки прайса (как читает десктоп): (код, подпись, обязательное)
@@ -34,6 +38,7 @@ ALIASES = {
 WARN_DAYS = 2   # прайс не обновлялся — предупреждение
 STALE_DAYS = 7  # старше — в выдачу не попадает
 INSERT_CHUNK = 2000
+PREVIEW_SCAN = 20000  # предпросмотр: дальше строки не считаем
 SCHEDULES = [1, 2, 4, 6, 12, 24, 48, 168]
 
 
@@ -58,40 +63,104 @@ def _provider(location, source_settings, name="Прайс", timeout=90):
                           cache_hours=1)
 
 
-def read_rows(location, source_settings, name="Прайс"):
-    """Скачать и разобрать файл: строки «заголовок -> значение» (или «номер колонки -> значение»)."""
-    provider = _provider(location, source_settings, name)
-    rows = provider._load_rows(location, refresh=True)
-    if rows is None:
-        raise RuntimeError(provider.last_message or "не удалось загрузить прайс")
-    return provider, rows
+def _iter_csv(provider, text, profile):
+    """Как UrlCsvProvider._parse_csv, но по одной строке: прайс в сотни тысяч строк не держим списком."""
+    has_header = (profile or {}).get("has_header", "auto")
+    if has_header == "auto":
+        first_line = next((line for line in io.StringIO(text) if line.strip()), "")
+        normalized = provider._normalize_key(first_line)
+        has_header = any(word in normalized for word in (
+            "article", "артикул", "brand", "бренд", "price", "цена", "quantity", "остаток"))
+    delimiter = provider._detect_delimiter(text[:1024 * 1024])
+    if has_header:
+        reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter)
+    else:
+        reader = ({str(index): value for index, value in enumerate(row)}
+                  for row in csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
+    for row in reader:
+        if row is not None:
+            yield {str(k): (v if v is not None else "") for k, v in row.items() if k is not None}
 
 
-def read_bytes(content, filename, source_settings, name="Прайс"):
-    """Разбор файла, уже скачанного (вложение письма): как read_rows, но без загрузки по адресу."""
-    location = f"mail://{filename}"
-    provider = _provider(location, source_settings, name)
+def _iter_xlsx(content):
+    """Как UrlCsvProvider._parse_xlsx, но по одной строке (openpyxl в режиме только чтения)."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError("для Excel-прайсов установите зависимость openpyxl") from exc
+    workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    try:
+        iterator = workbook.active.iter_rows(values_only=True)
+        headers = [str(value or "").strip() for value in next(iterator, ())]
+        for values in iterator:
+            row = {h: ("" if v is None else v) for h, v in zip(headers, values) if h}
+            if any(str(v).strip() for v in row.values()):
+                yield row
+    finally:
+        workbook.close()
+
+
+def iter_content(provider, content, filename, location):
+    """Строки скачанного файла (вложение письма, файл по ссылке или из FTP-каталога)."""
     lower = str(filename or "").lower()
-    if lower.endswith(".xls") and not bytes(content[:2]) == b"PK":
-        raise RuntimeError("старый формат XLS не поддерживается — попросите поставщика присылать XLSX или CSV")
-    if lower.endswith(".rar"):
-        raise RuntimeError("архив RAR не поддерживается — попросите поставщика присылать ZIP")
     data = bytes(content or b"")
+    if lower.endswith(".xls") and not data.startswith(b"PK"):
+        raise RuntimeError("старый формат XLS не поддерживается — попросите поставщика присылать XLSX или CSV")
+    if lower.endswith(".rar") or data.startswith(b"Rar!"):
+        raise RuntimeError("архив RAR не поддерживается — попросите поставщика присылать ZIP")
     if data.startswith(b"PK") and not lower.endswith(".xlsx"):
-        import io
-        import zipfile
-
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             inner = [n for n in archive.namelist() if not n.endswith("/")]
             xlsx = [n for n in inner if n.lower().endswith(".xlsx")]
             if xlsx and not any(n.lower().endswith((".csv", ".txt")) for n in inner):
-                return provider, location, provider._parse_xlsx(archive.read(xlsx[0]))
-    if lower.endswith(".xlsx"):
-        return provider, location, provider._parse_xlsx(data)
-    text = provider._decode_bytes(provider._unpack_content(data)).strip()
-    if not text:
-        raise RuntimeError("вложение пустое")
-    return provider, location, provider._parse_csv(text, provider._profile_for_url(location))
+                data, lower = archive.read(xlsx[0]), xlsx[0].lower()
+    if lower.endswith(".xlsx") or (data.startswith(b"PK") and b"xl/" in data[:2000]):
+        return _iter_xlsx(data)
+    text = provider._decode_bytes(provider._unpack_content(data))
+    del data
+    if not text or text.isspace():
+        raise RuntimeError("файл прайса пустой")
+    return _iter_csv(provider, text, provider._profile_for_url(location))
+
+
+def open_rows(location, source_settings, name="Прайс"):
+    """(provider, строки) по адресу: файл по ссылке или FTP, либо все прайсы FTP-каталога (адрес на «/»)."""
+    provider = _provider(location, source_settings, name)
+    if location.lower().startswith("ftp://") and location.endswith("/"):
+        return provider, _iter_ftp_directory(provider, location)
+    try:
+        content = provider._download_content(location)
+    except Exception as exc:
+        raise RuntimeError(f"{name}: ошибка загрузки {provider._safe_url(location)}: {exc}") from exc
+    return provider, iter_content(provider, content, urlparse(location).path, location)
+
+
+def _iter_ftp_directory(provider, location):
+    import ftplib
+
+    parsed = urlparse(location)
+    base = unquote(parsed.path or "/")
+    encoding = "cp1251" if (parsed.hostname or "").lower() == "ftp.favorit-auto.ru" else "utf-8"
+    try:
+        with ftplib.FTP(timeout=provider.timeout, encoding=encoding) as ftp:
+            ftp.connect(parsed.hostname, parsed.port or 21)
+            ftp.login(unquote(parsed.username or "anonymous"), unquote(parsed.password or ""))
+            ftp.cwd(base)
+            names = [n for n in ftp.nlst() if str(n).lower().endswith((".csv", ".txt", ".zip", ".gz", ".gzip", ".7z"))]
+    except Exception as exc:
+        raise RuntimeError(f"{provider.name}: ошибка FTP-каталога: {exc}") from exc
+    if not names:
+        raise RuntimeError(f"{provider.name}: в FTP-каталоге нет поддерживаемых прайсов")
+    for filename in names:  # по одному файлу: скачали, разобрали, отпустили
+        child = parsed._replace(path=f"{base.rstrip('/')}/{filename}").geturl()
+        try:
+            rows = iter_content(provider, provider._download_content(child), filename, location)
+        except Exception:
+            continue
+        source_name = humanize_price_name(os.path.basename(str(filename)).rsplit(".", 1)[0], force_prefix=True)
+        for row in rows:
+            row["__source_name"] = source_name
+            yield row
 
 
 def guess_mapping(headers):
@@ -109,35 +178,37 @@ def guess_mapping(headers):
     return out
 
 
-def preview(location, source_settings, limit=20, rows=None):
-    if rows is None:
-        _, rows = read_rows(location, source_settings)
+def preview(rows, source_settings, limit=20):
+    """Первые строки и колонки для разметки; строки считаем до PREVIEW_SCAN, дальше — «больше»."""
+    rows, sample, total = iter(rows), [], 0
+    for row in rows:
+        total += 1
+        if len(sample) < 200:
+            sample.append(row)
+        if total >= PREVIEW_SCAN:
+            break
+    more = total >= PREVIEW_SCAN and next(rows, None) is not None
     headers = []
-    for row in rows[:200]:
+    for row in sample:
         for key in row:
             if key not in headers and not str(key).startswith("__"):
                 headers.append(key)
-    return {"headers": headers, "rows": [[str(row.get(h, ""))[:80] for h in headers] for row in rows[:limit]],
-            "total": len(rows), "guess": guess_mapping(headers),
+    return {"headers": headers, "rows": [[str(row.get(h, ""))[:80] for h in headers] for row in sample[:limit]],
+            "total": total, "total_more": more, "guess": guess_mapping(headers),
             "mapping": dict((source_settings or {}).get("column_map") or {})}
 
 
-def normalize(provider, rows, location, warehouse=""):
-    """Строки файла -> предложения движка; отчёт: сколько принято и почему пропущены остальные."""
-    items, reasons = [], {}
-    for row in rows:
-        item = provider._normalize_row(row, location)
-        if item is None:
-            reasons["нет артикула"] = reasons.get("нет артикула", 0) + 1
-            continue
-        if not item.get("price") or float(item["price"]) <= 0:
-            reasons["нет цены"] = reasons.get("нет цены", 0) + 1
-            continue
-        if warehouse and not item.get("warehouse"):
-            item["warehouse"] = item["logo"] = warehouse
-        item.pop("source_url", None)  # адрес с паролем в предложение не кладём
-        items.append(item)
-    return items, reasons
+def normalize_row(provider, row, location, warehouse=""):
+    """Строка файла -> (предложение движка, None) или (None, причина пропуска)."""
+    item = provider._normalize_row(row, location)
+    if item is None:
+        return None, "нет артикула"
+    if not item.get("price") or float(item["price"]) <= 0:
+        return None, "нет цены"
+    if warehouse and not item.get("warehouse"):
+        item["warehouse"] = item["logo"] = warehouse
+    item.pop("source_url", None)  # адрес с паролем в предложение не кладём
+    return item, None
 
 
 def mailbox_for(session, box, source):
@@ -148,51 +219,74 @@ def mailbox_for(session, box, source):
     return {**(account.config or {}), **box.open(account.secrets_sealed)}, mail
 
 
-def fetch_mail(session, box, source):
-    """(provider, location, rows, письмо) по правилу источника «почта»."""
+def open_mail(session, box, source, skip_message_id=None):
+    """(provider, location, строки, письмо) по правилу источника «почта».
+    Если самое новое подходящее письмо — skip_message_id (уже загружено), вложение не скачиваем: строки None."""
     from mail_prices import find_latest
 
     mailbox, rule = mailbox_for(session, box, source)
-    content, filename, message_id, sent = find_latest(mailbox, rule)
-    provider, location, rows = read_bytes(content, filename, source.settings, source.name)
-    return provider, location, rows, {"message_id": message_id, "file": filename, "sent": sent}
+    content, filename, message_id, sent = find_latest(mailbox, rule, skip_message_id=skip_message_id)
+    letter = {"message_id": message_id, "file": filename or "", "sent": sent}
+    if content is None:
+        return None, "", None, letter
+    location = f"mail://{filename}"
+    provider = _provider(location, source.settings, source.name)
+    return provider, location, iter_content(provider, content, filename, location), letter
 
 
 def load(session, box, source, force=False):
-    """Загрузка одного источника: скачать (или взять из письма), разобрать, заменить строки в базе, отчёт."""
+    """Загрузка одного источника: скачать (или взять из письма), разобрать и заменить строки в базе — пачками,
+    в одной транзакции (поиск до конца загрузки видит старый прайс), с отчётом."""
     started = datetime.datetime.now()
     letter = None
     try:
         if source.kind == "email":
-            provider, location, rows, letter = fetch_mail(session, box, source)
             previous = source.status or {}
-            if not force and previous.get("ok") and previous.get("message_id") == letter["message_id"] and source.loaded_at:
+            same = previous.get("message_id") if not force and previous.get("ok") and source.loaded_at else None
+            provider, location, rows, letter = open_mail(session, box, source, skip_message_id=same)
+            if rows is None:
                 # то же письмо, что в прошлый раз: строки на месте, свежесть — по дате того письма
                 source.status = {**previous, "checked_at": db.utcnow().isoformat(timespec="seconds"),
-                                 "message": previous.get("message", "") .split(" · новых писем нет")[0] + " · новых писем нет"}
+                                 "message": previous.get("message", "").split(" · новых писем нет")[0] + " · новых писем нет"}
                 session.commit()
                 return source.status
         else:
             location = box.open(source.location_sealed).get("location", "") if source.location_sealed else ""
             if not location:
                 raise RuntimeError("не указан адрес прайса")
-            provider, rows = read_rows(location, source.settings, source.name)
-        items, reasons = normalize(provider, rows, location, (source.settings or {}).get("warehouse", ""))
-        if rows and not items:
-            raise RuntimeError("ни одной строки не разобрано — проверьте колонки (артикул и цена)")
+            provider, rows = open_rows(location, source.settings, source.name)
+        warehouse = (source.settings or {}).get("warehouse", "")
         session.execute(delete(db.PriceRow).where(db.PriceRow.source_id == source.id))
-        values = [{"organization_id": source.organization_id, "source_id": source.id,
-                   "article_key": article_key(item.get("article")), "brand": str(item.get("brand") or "")[:100],
-                   "item": item} for item in items]
-        for start in range(0, len(values), INSERT_CHUNK):
-            session.execute(insert(db.PriceRow), values[start:start + INSERT_CHUNK])
+        seen, count, reasons, batch = 0, 0, {}, []
+        for row in rows:
+            seen += 1
+            item, reason = normalize_row(provider, row, location, warehouse)
+            if reason:
+                reasons[reason] = reasons.get(reason, 0) + 1
+                continue
+            batch.append({"organization_id": source.organization_id, "source_id": source.id,
+                          "article_key": article_key(item.get("article")), "brand": str(item.get("brand") or "")[:100],
+                          "item": item})
+            count += 1
+            if len(batch) >= INSERT_CHUNK:
+                session.execute(insert(db.PriceRow), batch)
+                batch = []
+        if batch:
+            session.execute(insert(db.PriceRow), batch)
+        if not seen:
+            raise RuntimeError("в файле нет строк — прежний прайс оставлен")
+        if not count:
+            raise RuntimeError("ни одной строки не разобрано — проверьте колонки (артикул и цена); прежний прайс оставлен")
         source.loaded_at = db.utcnow()
-        status = {"ok": True, "rows": len(items), "skipped": sum(reasons.values()), "reasons": reasons,
-                  "message": f"загружено {len(items)} строк" + (f", пропущено {sum(reasons.values())}" if reasons else "")}
+        skipped = sum(reasons.values())
+        status = {"ok": True, "rows": count, "skipped": skipped, "reasons": reasons,
+                  "message": f"загружено {count} строк" + (f", пропущено {skipped}" if reasons else "")}
         if letter:
             status.update(letter)
             status["message"] += f" · письмо {letter['sent'][:16].replace('T', ' ')}, файл {letter['file']}"
     except Exception as exc:
+        session.rollback()  # строки прежнего прайса остаются
+        source = session.get(db.PriceSource, source.id)
         status = {"ok": False, "message": str(exc)[:300]}
     status["at"] = db.utcnow().isoformat(timespec="seconds")
     status["seconds"] = round((datetime.datetime.now() - started).total_seconds(), 1)

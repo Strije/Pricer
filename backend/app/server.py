@@ -1121,14 +1121,14 @@ def create_app(var_dir=None, database_url=None):
             secrets_list = [location]
             if source.kind == "email":
                 try:
-                    _, _, rows, letter = price_service.fetch_mail(session, box, source)
+                    _, _, rows, letter = price_service.open_mail(session, box, source)
+                    return {**price_service.preview(rows, settings), "letter": letter}
                 except Exception as exc:
                     raise HTTPException(status_code=400, detail=str(exc)[:300])
-                return {**price_service.preview("", settings, rows=rows), "letter": letter}
         if not location:
             raise HTTPException(status_code=400, detail="сначала укажите адрес прайса")
         try:
-            return price_service.preview(location, settings)
+            return price_service.preview(price_service.open_rows(location, settings)[1], settings)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=Redactor(secrets_list).text(str(exc))[:300])
 

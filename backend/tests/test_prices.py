@@ -25,6 +25,9 @@ def files(tmp_path_factory):
     root = tmp_path_factory.mktemp("prices")
     (root / "price.csv").write_bytes(CSV.encode("cp1251"))
     (root / "noheader.csv").write_text(NO_HEADER, encoding="utf-8")
+    (root / "big.csv").write_text("Артикул;Производитель;Цена\n" + "".join(f"A{i};BR;{i % 900 + 10}\n" for i in range(25000)),
+                                  encoding="utf-8")
+    (root / "bad.csv").write_text("Артикул;Остаток\nX1;5\nX2;7\n", encoding="utf-8")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as archive:
         archive.writestr("inner.csv", CSV)
@@ -161,9 +164,15 @@ class FakeImap:
     def search(self, charset, *criteria):
         return "OK", [" ".join(str(i + 1) for i in range(len(self.letters))).encode()]
 
+    fetched = []
+
     def fetch(self, msg_id, what):
         assert "PEEK" in what  # не помечаем прочитанным
-        return "OK", [(b"1", self.letters[int(msg_id) - 1])]
+        ids = (msg_id if isinstance(msg_id, bytes) else str(msg_id).encode()).split(b",")
+        self.fetched.append((what, len(ids)))
+        if "HEADER" in what:  # только заголовки — как отдаёт сервер, без тела
+            return "OK", [(i + b" (BODY[HEADER] {1}", self.letters[int(i) - 1].split(b"\n\n")[0] + b"\n\n") for i in ids] + [b")"]
+        return "OK", [(ids[0] + b" (BODY[] {1}", self.letters[int(ids[0]) - 1]), b")"]
 
     def logout(self):
         pass
@@ -198,11 +207,14 @@ def test_mail_prices(app_factory, monkeypatch):  # noqa: F811
     assert status["ok"] and status["rows"] == 2 and "af_price.csv" in status["message"]
 
     from app import db
+    FakeImap.fetched.clear()
     with client.app.state.pricer["Session"]() as session:  # фоновая проверка: то же письмо — не перезагружаем
         from app import prices
         row = session.get(db.PriceSource, src["id"])
         again = prices.load(session, client.app.state.pricer["box"], row)
     assert "новых писем нет" in again["message"]
+    assert all("HEADER" in what for what, _ in FakeImap.fetched)  # вложение даже не скачивали
+    assert FakeImap.fetched == [(FakeImap.fetched[0][0], 3)]  # заголовки — одним запросом
 
     FakeImap.letters.append(letter("price@avtoformula.ru", "Прайс Автоформула", "af_price.zip", _zip("Артикул;Цена\nOC90;399\n"), msg_id="<zip@af>"))
     assert wait_load(client, src["id"])["rows"] == 1  # ZIP во вложении
@@ -218,3 +230,24 @@ def _zip(text):
         archive.writestr("p.csv", text)
     return buf.getvalue()
 
+
+
+def test_big_file_in_batches_and_failed_load_keeps_rows(app_factory, files, monkeypatch):  # noqa: F811
+    from app import db, prices
+
+    monkeypatch.setattr(prices, "PREVIEW_SCAN", 1000)
+    monkeypatch.setattr(prices, "INSERT_CHUNK", 3000)
+    make_client, _ = app_factory
+    client = register(make_client(), "prices-big@example.com", org="Большой прайс")
+    src = client.post("/api/prices", headers=H, json={"name": "Большой", "location": f"{files}/big.csv"}).json()
+    pv = client.post(f"/api/prices/{src['id']}/preview", headers=H).json()
+    assert pv["total"] == 1000 and pv["total_more"] is True  # предпросмотр не читает файл до конца
+    assert wait_load(client, src["id"])["rows"] == 25000
+    # файл сменился на неразбираемый — ошибка, а прежние строки остаются в выдаче
+    client.put(f"/api/prices/{src['id']}", headers=H, json={"location": f"{files}/bad.csv"})
+    status = wait_load(client, src["id"])
+    assert status["ok"] is False and "прежний прайс оставлен" in status["message"]
+    with client.app.state.pricer["Session"]() as session:
+        assert session.query(db.PriceRow).filter_by(source_id=src["id"]).count() == 25000
+    provider = prices.PriceDbProvider(client.app.state.pricer["Session"], org_of(client, "prices-big@example.com"))
+    assert provider.get_prices("a24999")[0]["price"] == 24999 % 900 + 10
