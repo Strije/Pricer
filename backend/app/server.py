@@ -89,6 +89,11 @@ class LoginRequest(BaseModel):
     password: str = Field(max_length=200)
 
 
+class PasswordChangeRequest(BaseModel):
+    current: str = Field(max_length=200)
+    new: str = Field(min_length=8, max_length=200)
+
+
 class AccountRequest(BaseModel):
     section: str | None = None
     config: dict = Field(default_factory=dict)
@@ -535,6 +540,22 @@ def create_app(var_dir=None, database_url=None):
                 session.execute(text("SELECT 1"))
         except Exception as exc:
             return JSONResponse({"ok": False, "db": type(exc).__name__}, status_code=503)
+        return {"ok": True}
+
+    @app.post("/api/auth/password")
+    def change_password(payload: PasswordChangeRequest, request: Request, user=Depends(current_user)):
+        """Смена своего пароля: остальные входы (другие браузеры, телефоны) закрываются."""
+        if by_email.wait(user["email"]):
+            raise HTTPException(status_code=429, detail="слишком много попыток — попробуйте позже")
+        with Session() as session:
+            row = session.get(db.User, user["id"])
+            if not verify_password(payload.current, row.password_hash):
+                by_email.fail(user["email"])
+                raise HTTPException(status_code=400, detail="текущий пароль неверный")
+            row.password_hash = hash_password(payload.new)
+            keep = token_hash(request.cookies.get(COOKIE) or "")
+            session.query(db.Session).filter(db.Session.user_id == user["id"], db.Session.token_hash != keep).delete()
+            session.commit()
         return {"ok": True}
 
     @app.post("/api/auth/logout")

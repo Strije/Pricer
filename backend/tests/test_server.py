@@ -250,3 +250,16 @@ def test_manage_commands(tmp_path, monkeypatch, capsys):
     manage.main(["list"])
     assert "Автодруг" in capsys.readouterr().out
     assert manage.main(["what"]) == 2
+
+
+def test_change_password_closes_other_sessions(app_factory):
+    make_client, _ = app_factory
+    first = register(make_client(), "pw@example.com", org="Пароль")
+    second = make_client()
+    second.post("/api/auth/login", headers=H, json={"email": "pw@example.com", "password": "password123"})
+    assert first.post("/api/auth/password", headers=H, json={"current": "bad", "new": "newpassword1"}).status_code == 400
+    assert first.post("/api/auth/password", headers=H, json={"current": "password123", "new": "short"}).status_code == 422
+    assert first.post("/api/auth/password", headers=H, json={"current": "password123", "new": "newpassword1"}).json()["ok"]
+    assert first.get("/api/me").status_code == 200  # свой вход остаётся
+    assert second.get("/api/me").status_code == 401  # другие — закрыты
+    assert make_client().post("/api/auth/login", headers=H, json={"email": "pw@example.com", "password": "newpassword1"}).status_code == 200
