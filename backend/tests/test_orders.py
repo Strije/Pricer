@@ -212,3 +212,39 @@ def test_replace_variant_fixed_desktop_bug(flow):
     after = client.get(f"/api/orders/{created['order_id']}").json()["items"][0]
     assert after["internal_offer_id"] == variant["internal_offer_id"]
     assert after["name"] == (variant.get("name") or created["items"][0]["name"])
+
+
+def test_xlsx_upload_in_demo_mode(flow):
+    """Регресс: в демо-режиме подмена времени ломала openpyxl, загрузка XLSX давала 500."""
+    import datetime
+
+    from openpyxl import Workbook
+
+    assert datetime.datetime.now().year >= 2026 and datetime.datetime.__name__ == "datetime"
+    book = Workbook()
+    book.active.append(["Бренд", "Артикул", "Наименование", "Количество"])
+    book.active.append(["ZIC", "162622", "Масло", 2])
+    data = io.BytesIO()
+    book.save(data)
+    response = flow["client"].post("/api/order-file/parse", headers=H,
+                                   files={"file": ("order.xlsx", io.BytesIO(data.getvalue()), "application/octet-stream")})
+    assert response.status_code == 200, response.text
+    assert response.json()["rows"] == [{"brand": "ZIC", "article": "162622", "name": "Масло", "quantity": 2}]
+
+
+def test_broken_xlsx_gives_400_not_500(flow):
+    response = flow["client"].post("/api/order-file/parse", headers=H,
+                                   files={"file": ("order.xlsx", io.BytesIO(b"not a zip"), "application/octet-stream")})
+    assert response.status_code == 400 and "не читается" in response.json()["detail"]
+
+
+def test_1c_html_xls_export(flow):
+    html = ("<html><meta charset='utf-8'><table><tr><th>Бренд</th><th>Артикул</th><th>Наименование</th><th>Количество</th></tr>"
+            "<tr><td>ZIC</td><td>162622</td><td>Масло&nbsp;ZIC</td><td>3</td></tr></table></html>").encode("utf-8")
+    response = flow["client"].post("/api/order-file/parse", headers=H,
+                                   files={"file": ("Склад.xls", io.BytesIO(html), "application/vnd.ms-excel")})
+    assert response.status_code == 200, response.text
+    assert response.json()["rows"] == [{"brand": "ZIC", "article": "162622", "name": "Масло ZIC", "quantity": 3}]
+    binary = flow["client"].post("/api/order-file/parse", headers=H,
+                                 files={"file": ("old.xls", io.BytesIO(b"\xd0\xcf\x11\xe0binary"), "application/vnd.ms-excel")})
+    assert binary.status_code == 400 and "XLSX" in binary.json()["detail"]

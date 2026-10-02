@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, urlsplit
 import requests
 from requests.adapters import HTTPAdapter
 
-__all__ = ["DUMMY", "RECORDED_AT", "RECORDINGS", "FrozenDateTime", "Replayer", "install", "load", "record_tool"]
+__all__ = ["DUMMY", "RECORDED_AT", "RECORDINGS", "FrozenDateTime", "Replayer", "frozen_datetime_module", "install", "load", "record_tool"]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -118,6 +118,20 @@ class FrozenDateTime(_dt.datetime):
     @classmethod
     def now(cls, tz=None):
         return RECORDED_AT if tz is None else RECORDED_AT.replace(tzinfo=tz)
+
+
+def frozen_datetime_module():
+    """Копия модуля datetime, где datetime.now() возвращает время записи.
+
+    Подставляется в модули, которые делают `import datetime` (Armtek): менять сам datetime.datetime
+    нельзя — подмена расползается на всю программу (на ней падало чтение Excel в openpyxl).
+    """
+    import types
+
+    module = types.ModuleType("datetime")
+    module.__dict__.update({k: v for k, v in vars(_dt).items() if not k.startswith("__")})
+    module.datetime = FrozenDateTime
+    return module
 
 
 def install(monkeypatch, records, reuse=False):

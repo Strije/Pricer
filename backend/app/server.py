@@ -225,7 +225,7 @@ def create_app(var_dir=None, database_url=None):
         state["replayer"] = replay.install(_Patch(), replay.load(name), reuse=True)
         time.sleep = lambda *_: None  # опрос Avtoto в записи не ждёт
         favorit.datetime = replay.FrozenDateTime
-        armtek.datetime.datetime = replay.FrozenDateTime
+        armtek.datetime = replay.frozen_datetime_module()  # только внутри модуля Armtek
         demo_path = os.path.join(BACKEND, "tests", "fixtures", "recordings", "engine_settings.json")
         with open(demo_path, encoding="utf-8") as file:
             demo_settings = json.load(file)
@@ -564,14 +564,26 @@ def create_app(var_dir=None, database_url=None):
         if len(raw) > ORDER_FILE_LIMIT:
             raise HTTPException(status_code=413, detail="файл больше 5 МБ")
         suffix = os.path.splitext(file.filename or "")[1].lower()
-        if suffix not in (".csv", ".txt", ".xlsx", ".xlsm"):
-            raise HTTPException(status_code=400, detail="поддерживаются CSV, TXT и XLSX")
-        with tempfile.TemporaryDirectory() as tmp:
+        if suffix not in (".csv", ".txt", ".xlsx", ".xlsm", ".xls"):
+            raise HTTPException(status_code=400, detail="поддерживаются CSV, TXT, XLSX и выгрузки 1С в XLS")
+        if suffix == ".xls" and not raw.lstrip()[:1] == b"<":
+            raise HTTPException(status_code=400, detail="старый двоичный XLS не поддерживается — сохраните файл как XLSX")
+        # ignore_cleanup_errors: на Windows файл, который библиотека не закрыла после сбоя, нельзя
+        # удалить сразу — это не должно превращать понятную ошибку 400 в 500.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = os.path.join(tmp, "order" + suffix)
             with open(path, "wb") as handle:
                 handle.write(raw)
             try:
-                rows, errors = read_sales_report(path)
+                if suffix == ".xls":
+                    # Выгрузка 1С: внутри HTML-таблица (читает bulk_pricing десктопа).
+                    from bulk_pricing import _read_html_table
+                    from sales_report_importer import merge_sales_report_rows, parse_sales_report_rows
+
+                    parsed, errors = parse_sales_report_rows(_read_html_table(path))
+                    rows = merge_sales_report_rows(parsed)
+                else:
+                    rows, errors = read_sales_report(path)
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"файл не читается: {exc}"[:300])
         if len(rows) > ORDER_FILE_ROWS:

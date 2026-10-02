@@ -91,7 +91,7 @@ def results():
     replayer = replay.install(mp, records)
     mp.setattr(time, "sleep", lambda *_: None)
     mp.setattr(favorit, "datetime", replay.FrozenDateTime)
-    mp.setattr(armtek.datetime, "datetime", replay.FrozenDateTime)
+    mp.setattr(armtek, "datetime", replay.frozen_datetime_module())
     providers = build_providers()
     out = {}
     for brand, article in ITEMS:

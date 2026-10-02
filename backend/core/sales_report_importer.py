@@ -189,11 +189,14 @@ def _read_xlsx(path):
     except ImportError as exc:
         raise OSError("для Excel-файлов нужна зависимость openpyxl") from exc
     workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook.active
-    rows = []
-    for row in sheet.iter_rows(values_only=True):
-        rows.append(["" if value is None else str(value) for value in row])
-    workbook.close()
+    try:
+        sheet = workbook.active
+        rows = []
+        for row in sheet.iter_rows(values_only=True):
+            rows.append(["" if value is None else str(value) for value in row])
+    finally:
+        # Закрываем и при ошибке: на Windows открытый файл не удалить (WinError 32).
+        workbook.close()
     return rows
 
 

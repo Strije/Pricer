@@ -34,7 +34,7 @@ def engine_results(tmp_path_factory):
     replayer = replay.install(mp, records)
     mp.setattr(time, "sleep", lambda *_: None)
     mp.setattr(favorit, "datetime", replay.FrozenDateTime)
-    mp.setattr(armtek.datetime, "datetime", replay.FrozenDateTime)
+    mp.setattr(armtek, "datetime", replay.frozen_datetime_module())
 
     from engine import ProcurementEngine
 

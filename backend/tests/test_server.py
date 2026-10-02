@@ -24,7 +24,7 @@ def app_factory(tmp_path_factory):
     mp.setattr(HTTPAdapter, "send", HTTPAdapter.send)
     mp.setattr(time, "sleep", time.sleep)
     mp.setattr(favorit, "datetime", favorit.datetime)
-    mp.setattr(armtek.datetime, "datetime", armtek.datetime.datetime)
+    mp.setattr(armtek, "datetime", armtek.datetime)
     from app.server import create_app
 
     var = tmp_path_factory.mktemp("var")
