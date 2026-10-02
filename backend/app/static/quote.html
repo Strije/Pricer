@@ -43,10 +43,26 @@
   button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 12px 20px; background: var(--accent); color: #fff; cursor: pointer; }
   button:disabled { opacity: .6; }
   .msg { color: var(--bad); font-size: 14px; margin-top: 8px; } .msg.ok { color: var(--ok); }
+  .tools { display: flex; justify-content: flex-end; } .tools button { background: none; color: var(--accent); padding: 4px 0; font-size: 14px; }
+  .print-only { display: none; }
+  /* Печать и PDF («Сохранить как PDF» в окне печати): для клиентов, которые пришли лично */
+  @media print {
+    :root { --bg: #fff; --panel: #fff; --text: #000; --muted: #444; --line: #bbb; }
+    body { font-size: 12px; } main { max-width: none; padding: 0; }
+    .bar, #extra, #msg, .tools, .banner.ok { display: none !important; }
+    .print-only { display: block; }
+    .line { break-inside: avoid; border-radius: 0; padding: 8px 0; border: 0; border-top: 1px solid #000; margin: 8px 0; }
+    .opt { border: 0; border-bottom: 1px dotted #bbb; border-radius: 0; padding: 6px 0; margin: 0; background: none !important; }
+    .opt input { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; border: 1.5px solid #000; border-radius: 2px; }
+    .opt input:checked { background: #000; }
+    img.photo { width: 40px; height: 40px; }
+    .tag { border: 1px solid #999; background: none !important; color: #000 !important; }
+  }
 </style>
 </head>
 <body>
 <main>
+  <div class="tools"><button type="button" id="print">Печать / PDF</button></div>
   <div class="muted" id="org"></div>
   <h1 id="title">Подбор запчастей</h1>
   <div class="muted" id="client"></div>
@@ -57,6 +73,7 @@
     <label class="f">Как с вами связаться (если менеджер не знает) <input type="text" id="contact" placeholder="Телефон или мессенджер"></label>
   </div>
   <div class="msg" id="msg"></div>
+  <div class="print-only muted" id="print-foot"></div>
 </main>
 <div class="bar" id="bar" hidden><div class="in">
   <div><div class="muted">Итого по выбранному</div><div class="total" id="total">0 ₽</div></div>
@@ -100,6 +117,8 @@ function render() {
         <span class="body muted">Не нужно</span></label>
     </div>`).join("") || '<p class="muted">В подборе пока нет позиций.</p>';
   $("comment").value = quote.client_comment || $("comment").value;
+  $("print-foot").innerHTML = `Отметьте подходящие варианты. Выбрать онлайн: ${esc(location.origin + location.pathname)}<br>
+    Распечатано ${esc(new Date().toLocaleString("ru-RU"))}${until ? " · цены действительны до " + esc(until) : ""}`;
   $("extra").hidden = $("bar").hidden = quote.locked;
   document.querySelectorAll('#lines input[type=radio]').forEach((r) => r.onchange = updateTotal);
   updateTotal();
@@ -123,7 +142,11 @@ $("send").onclick = async () => {
   } catch (err) { $("msg").textContent = err.message; }
   $("send").disabled = false;
 };
-call("GET", `/api/public/quote/${encodeURIComponent(token)}`).then((q) => { quote = q; render(); })
+$("print").onclick = () => window.print();
+call("GET", `/api/public/quote/${encodeURIComponent(token)}`).then((q) => {
+  quote = q; render();
+  if (new URLSearchParams(location.search).get("print") === "1") setTimeout(() => window.print(), 300);
+})
   .catch((err) => { $("lines").innerHTML = `<p class="msg">${esc(err.message)}</p>`; });
 </script>
 </body>

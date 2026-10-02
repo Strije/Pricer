@@ -99,6 +99,7 @@
         <select id="qe-hours" title="Сколько действуют цены"><option value="24">цены на 24 часа</option><option value="48">на 2 дня</option><option value="72">на 3 дня</option><option value="168">на неделю</option></select>
         <button id="qe-send">${sent ? "Обновить срок и ссылку" : "Отправить клиенту"}</button>
         ${q.status === "chosen" && !q.order_id ? '<button id="qe-order">Оформить заказ по выбору</button>' : ""}
+        <button class="secondary" id="qe-print" title="Распечатать или сохранить PDF для клиента, который пришёл лично">Печать / PDF</button>
         <button class="danger" id="qe-delete">Удалить</button>
         <span class="msg" id="qe-msg"></span>
       </div>
@@ -127,6 +128,15 @@
     if ($("qe-activate")) $("qe-activate").onclick = () => { setActive(q); renderEditor(); renderList(); };
     $("qe-line").onclick = () => run(() => api(`/api/quotes/${q.id}/lines`, {method: "POST", body: {request: "Позиция", qty: 1}}));
     $("qe-send").onclick = () => run(() => api(`/api/quotes/${q.id}/send`, {method: "POST", body: {hours: Number($("qe-hours").value)}}), "Ссылка готова — отправьте её клиенту");
+    $("qe-print").onclick = async () => {
+      // печатается страница клиента: та же цена и срок действия, что по ссылке; черновик сначала отправляется
+      const win = window.open("about:blank");
+      try {
+        let cur = Q.current;
+        if (cur.status === "draft") cur = Q.current = await api(`/api/quotes/${q.id}/send`, {method: "POST", body: {hours: Number($("qe-hours").value)}});
+        win.location = cur.url + "?print=1"; renderEditor(); renderList();
+      } catch (err) { win.close(); msg.className = "msg"; msg.textContent = err.message; }
+    };
     $("qe-delete").onclick = () => { if (confirm(`Удалить подбор «${q.title}»?`)) run(async () => {
       await api(`/api/quotes/${q.id}`, {method: "DELETE"}); if (Q.active === q.id) setActive(null); Q.current = null;
       $("q-editor").innerHTML = '<p class="note">Подбор удалён.</p>'; await loadQuotes();
