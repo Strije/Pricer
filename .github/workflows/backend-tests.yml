@@ -1,9 +1,9 @@
 name: backend-tests
 on:
   push:
-    paths: ["backend/**"]
+    paths: ["backend/**", "deploy/**"]
   pull_request:
-    paths: ["backend/**"]
+    paths: ["backend/**", "deploy/**"]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,3 +14,24 @@ jobs:
           python-version: "3.13"
       - run: pip install -e "backend[dev]"
       - run: python -m pytest backend -q
+  postgres:
+    # та же база, что на сервере (deploy/setup.sh): PostgreSQL 16
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: pricer
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PRICER_DATABASE_URL: postgresql+psycopg://postgres:test@127.0.0.1:5432/pricer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e "backend[dev]"
+      - run: python -m pytest backend -q
+      - run: bash -n deploy/setup.sh && python -m py_compile deploy/watchdog.py

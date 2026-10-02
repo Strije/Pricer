@@ -1,0 +1,26 @@
+[Unit]
+Description=Pricer — проценка по всем поставщикам (веб)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=pricer
+Group=pricer
+WorkingDirectory=/opt/pricer/backend
+EnvironmentFile=/etc/pricer.env
+# Слушаем только локально — наружу отдаёт nginx с HTTPS (deploy/nginx-pricer.conf).
+# Один процесс: фоновые задачи поиска и проверки статусов живут в памяти сервиса.
+ExecStart=/opt/pricer/venv/bin/uvicorn app.server:app --host 127.0.0.1 --port 8095 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# /var/lib/pricer — единственное, куда сервис пишет: ключ шифрования, справочник брендов, кэши
+StateDirectory=pricer
+StateDirectoryMode=0700
+MemoryMax=900M
+
+[Install]
+WantedBy=multi-user.target

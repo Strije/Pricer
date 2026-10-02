@@ -71,3 +71,37 @@ class SecretBox:
             return json.loads(self._fernet.decrypt(token.encode()).decode("utf-8"))
         except InvalidToken as exc:
             raise ValueError("секреты не расшифровываются: сменился ключ PRICER_SECRET_KEY?") from exc
+
+
+class LoginLimiter:
+    """Защита входа от подбора пароля: после `limit` неудач за `window` секунд по одному ключу
+    (почта, адрес) вход по нему закрыт до конца окна. Память процесса — сервис работает в одном процессе."""
+
+    def __init__(self, limit, window=900, clock=None):
+        import threading
+        import time
+
+        self.limit, self.window = limit, window
+        self.clock = clock or time.monotonic
+        self.failures = {}
+        self.lock = threading.Lock()
+
+    def wait(self, key):
+        """Сколько секунд ждать до следующей попытки (0 — можно)."""
+        now = self.clock()
+        with self.lock:
+            recent = [t for t in self.failures.get(key, []) if now - t < self.window]
+            self.failures[key] = recent
+            if len(recent) >= self.limit:
+                return int(self.window - (now - recent[0])) + 1
+            return 0
+
+    def fail(self, key):
+        with self.lock:
+            self.failures.setdefault(key, []).append(self.clock())
+            if len(self.failures) > 50000:  # не растём бесконечно от перебора разных адресов
+                self.failures.clear()
+
+    def reset(self, key):
+        with self.lock:
+            self.failures.pop(key, None)

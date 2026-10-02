@@ -1,0 +1,7 @@
+[Unit]
+Description=Сторож Pricer (проверки + суточная копия базы и ключа)
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pricer.env
+ExecStart=/usr/bin/python3 /opt/pricer/deploy/watchdog.py

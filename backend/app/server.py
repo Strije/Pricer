@@ -12,6 +12,8 @@
     PRICER_SECURE_COOKIES — 1 при работе по HTTPS.
     PRICER_REPLAY         — 1 или путь к записи .jsonl.gz: демонстрация без сети на записанных
                             ответах; организации без поставщиков получают тестовые настройки.
+    PRICER_PUBLIC_URL     — внешний адрес (https://…) для ссылок подборов и возврата из ЮKassa.
+    PRICER_DOCS           — 1, чтобы открыть документацию API на /docs (по умолчанию закрыта).
     PRICER_STATUS_REFRESH_MINUTES — как часто сервер сам спрашивает статусы заказов у поставщиков
                             (по умолчанию 30 минут, 0 — только по кнопке; в демо-режиме выключено).
 """
@@ -452,7 +454,10 @@ def create_app(var_dir=None, database_url=None):
             raise HTTPException(status_code=403, detail="нужны права администратора организации")
         return user
 
-    app = FastAPI(title="Pricer", version="0.3.0")
+    # Документация API (/docs) — только по явному разрешению: на публичном сервере она не нужна.
+    docs = os.environ.get("PRICER_DOCS", "0") == "1"
+    app = FastAPI(title="Pricer", version="0.9.0", docs_url="/docs" if docs else None,
+                  redoc_url=None, openapi_url="/openapi.json" if docs else None)
     from starlette.middleware.gzip import GZipMiddleware
 
     app.add_middleware(GZipMiddleware, minimum_size=2000)  # поток событий (SSE) не сжимается
@@ -498,14 +503,38 @@ def create_app(var_dir=None, database_url=None):
         start_session(response, user_id)
         return {"ok": True}
 
+    from app.security import LoginLimiter
+
+    by_email, by_address = LoginLimiter(limit=5), LoginLimiter(limit=30)
+
     @app.post("/api/auth/login")
-    def login(payload: LoginRequest, response: Response):
+    def login(payload: LoginRequest, response: Response, request: Request):
+        email = payload.email.strip().lower()
+        address = request.client.host if request.client else ""
+        wait = max(by_email.wait(email), by_address.wait(address))
+        if wait:
+            raise HTTPException(status_code=429, detail=f"слишком много попыток входа — попробуйте через {max(1, wait // 60)} мин.")
         with Session() as session:
-            user = session.query(db.User).filter_by(email=payload.email.strip().lower()).first()
+            user = session.query(db.User).filter_by(email=email).first()
             if user is None or not verify_password(payload.password, user.password_hash):
+                by_email.fail(email)
+                by_address.fail(address)
                 raise HTTPException(status_code=401, detail="неверный email или пароль")
             user_id = user.id
+        by_email.reset(email)
         start_session(response, user_id)
+        return {"ok": True}
+
+    @app.get("/health")
+    def health():
+        """Для сторожа сервера: сервис жив и база отвечает."""
+        from sqlalchemy import text
+
+        try:
+            with Session() as session:
+                session.execute(text("SELECT 1"))
+        except Exception as exc:
+            return JSONResponse({"ok": False, "db": type(exc).__name__}, status_code=503)
         return {"ok": True}
 
     @app.post("/api/auth/logout")

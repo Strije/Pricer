@@ -1,0 +1,38 @@
+# Развёртывание Pricer на VPS
+
+Pricer ставится рядом с другими сервисами (на том же VPS работают API приложения Автодруг и
+VPN-подписка) и их не трогает: свой пользователь `pricer`, своя база PostgreSQL `pricer`,
+свой сайт nginx, порт 8095 только на 127.0.0.1.
+
+## 1. Адрес
+В DNS домена добавьте запись **A**: `pricer.avtodrug92.ru → IP сервера` (имя — любое ваше).
+Подождите, пока запись начнёт отвечать (обычно 5–30 минут): `ping pricer.avtodrug92.ru`.
+
+## 2. Установка (от root на сервере)
+```
+curl -fsSLo pricer-setup.sh https://raw.githubusercontent.com/Strije/Pricer/claude/price-web-migration-plan-fmsod0/deploy/setup.sh
+bash pricer-setup.sh install pricer.avtodrug92.ru ваш@email
+bash pricer-setup.sh create-org "Автодруг" ваш@email
+```
+Вторая команда печатает пароль администратора — один раз. Войдите на https://pricer.avtodrug92.ru,
+на вкладке «Поставщики» импортируйте `settings.json`, подключите Laximo и ЮKassa.
+
+## 3. Потом
+| Команда | Что делает |
+|---|---|
+| `bash pricer-setup.sh update` | свежий код из git, перезапуск, проверка |
+| `bash pricer-setup.sh status` | сервис, версия, последние копии |
+| `bash pricer-setup.sh backup` | копия прямо сейчас |
+| `bash pricer-setup.sh restore /var/backups/pricer/pricer-ГГГГММДД.tar.gz` | восстановление |
+| `bash pricer-setup.sh reset-password email` | новый пароль пользователю |
+
+## Что где
+- `/etc/pricer.env` — настройки (пароль базы, адрес), права 600. В git только `pricer.env.example`.
+- `/var/lib/pricer/secret.key` — **ключ шифрования паролей поставщиков**. Без него база бесполезна.
+- `/var/backups/pricer/` — копии раз в сутки (база + ключ), 14 последних, только для root.
+  Раз в месяц скачивайте свежую копию к себе: если сервер пропадёт, это единственный путь назад.
+- Сторож (`pricer-watchdog.timer`) каждые 5 минут проверяет сервис, диск и сертификат и пишет
+  в Telegram при сбое и при починке (бот берётся из настроек Автодруга на этом же сервере).
+- ЮKassa: в личном кабинете ЮKassa → Интеграция → HTTP-уведомления укажите
+  `https://pricer.avtodrug92.ru/api/yookassa/webhook` (событие `payment.succeeded`).
+- IP сервера добавьте у поставщиков, которые пускают в API только с разрешённых адресов.

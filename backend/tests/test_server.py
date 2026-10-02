@@ -128,8 +128,11 @@ def test_import_settings_encrypts_secrets_and_keeps_search(app_factory):
     assert {"login", "password"} <= set(armtek["secrets_set"])
     assert armtek["config"]["allowed_warehouses"]  # открытые поля видны
 
-    raw_db = (var / "pricer.db").read_bytes()
-    assert b"REPLAYSECRET" not in raw_db  # и в файле базы они зашифрованы
+    from sqlalchemy import text
+
+    with client.app.state.pricer["Session"]() as session:  # и в самой базе они зашифрованы (SQLite или PostgreSQL)
+        raw_rows = session.execute(text("SELECT config, secrets_sealed FROM supplier_accounts")).all()
+    assert raw_rows and "REPLAYSECRET" not in str(raw_rows)
 
     # Поиск теперь идёт по поставщикам из базы — результат тот же, что у десктопа
     result = search(client, "AIRLINE", "AHR12D01")[-1][1]
@@ -204,3 +207,46 @@ def test_supplier_list_active_and_check(app_factory):
     assert next(a for a in client.get("/api/suppliers").json() if a["id"] == created["id"])["status"]["ok"] is False
     other = register(make_client(), "check-other@example.com", org="Чужая")
     assert other.post(f"/api/suppliers/{created['id']}/check", headers=H).status_code == 404
+
+
+def test_login_limiter_and_health(app_factory):
+    make_client, _ = app_factory
+    register(make_client(), "limit@example.com", org="Лимит")
+    client = make_client()
+    for _ in range(5):
+        assert client.post("/api/auth/login", headers=H, json={"email": "limit@example.com", "password": "wrong"}).status_code == 401
+    blocked = client.post("/api/auth/login", headers=H, json={"email": "limit@example.com", "password": "password123"})
+    assert blocked.status_code == 429  # даже верный пароль — после 5 неудач подождать
+    assert client.get("/health").json() == {"ok": True}
+    assert client.get("/docs").status_code == 404  # документация API закрыта по умолчанию
+
+
+def test_login_limiter_window():
+    from app.security import LoginLimiter
+
+    now = [0.0]
+    limiter = LoginLimiter(limit=2, window=60, clock=lambda: now[0])
+    limiter.fail("a"); limiter.fail("a")
+    assert limiter.wait("a") > 0 and limiter.wait("b") == 0
+    now[0] = 61
+    assert limiter.wait("a") == 0
+
+
+def test_manage_commands(tmp_path, monkeypatch, capsys):
+    from app import manage
+
+    monkeypatch.setenv("PRICER_VAR_DIR", str(tmp_path))
+    monkeypatch.delenv("PRICER_DATABASE_URL", raising=False)
+    assert manage.main(["create-org", "Автодруг", "Admin@Example.com"]) == 0
+    out = capsys.readouterr().out
+    password = out.split("пароль: ")[1].split()[0]
+    from app.security import verify_password
+    with manage.sessionmaker()() as session:
+        from app import db
+        user = session.query(db.User).filter_by(email="admin@example.com").one()
+        assert user.role == "admin" and verify_password(password, user.password_hash)
+    assert manage.main(["reset-password", "admin@example.com"]) == 0
+    assert "Новый пароль" in capsys.readouterr().out
+    manage.main(["list"])
+    assert "Автодруг" in capsys.readouterr().out
+    assert manage.main(["what"]) == 2
