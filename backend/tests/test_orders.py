@@ -248,3 +248,10 @@ def test_1c_html_xls_export(flow):
     binary = flow["client"].post("/api/order-file/parse", headers=H,
                                  files={"file": ("old.xls", io.BytesIO(b"\xd0\xcf\x11\xe0binary"), "application/vnd.ms-excel")})
     assert binary.status_code == 400 and "XLSX" in binary.json()["detail"]
+
+
+def test_cyrillic_vin_rejected(flow):
+    bad = flow["client"].post("/api/orders", headers=H, json={"job_id": flow["job"], "rows": [0], "client": "В", "vin": "ЙЦУКЕН"})
+    assert bad.status_code == 400 and "латиниц" in bad.json()["detail"]
+    ok = flow["client"].post("/api/orders", headers=H, json={"job_id": flow["job"], "rows": [0], "client": "В", "vin": "GX100-1234567"})
+    assert ok.status_code == 200

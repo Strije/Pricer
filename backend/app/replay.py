@@ -93,7 +93,9 @@ class Replayer:
             body = record_tool._decode(body)
         record = self.find(request.method, request.url, body)
         if record is None:
-            raise requests.exceptions.ConnectionError(f"нет записи для {request.method} {request.url}")
+            # Ответа нет в записи (например, оформление заказа): в сеть запрос не уходит.
+            raise requests.exceptions.ConnectionError(
+                "демо-режим: ответа нет в записи, к поставщику ничего не отправлено")
         response = requests.Response()
         response.status_code = int(record.get("status_code") or 200)
         response.headers.update(record.get("response_headers") or {})

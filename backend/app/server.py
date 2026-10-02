@@ -17,6 +17,7 @@ import asyncio
 import datetime
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -624,6 +625,8 @@ def create_app(var_dir=None, database_url=None):
             raise HTTPException(status_code=404, detail="подбор не найден — повторите поиск по файлу")
         if not job.done:
             raise HTTPException(status_code=409, detail="подбор ещё идёт")
+        if re.search(r"[А-Яа-яЁё]", request.vin or ""):
+            raise HTTPException(status_code=400, detail="VIN набран кириллицей — переключите раскладку на латиницу")
         engine = engine_for(user["organization_id"])
         with engine.lock:
             entries, errors = order_service.prepare_entries(engine, job.results, request.rows, request.selections)
