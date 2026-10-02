@@ -442,7 +442,21 @@ def _article_from_code(code):
     return code.split("-", 1)[1] if "-" in code else code
 
 
-def mikado_orders(provider, since, max_deliveries=80):
+# Состав отгрузки не меняется: при фоновой проверке раз в полчаса запрашиваем только новые.
+_MIKADO_INFO_CACHE = {}
+
+
+def _mikado_delivery_lines(auth, number):
+    key = (str(auth.get("nClientID")), number)
+    if key not in _MIKADO_INFO_CACHE:
+        if len(_MIKADO_INFO_CACHE) > 20000:
+            _MIKADO_INFO_CACHE.clear()
+        _MIKADO_INFO_CACHE[key] = _mikado_records(
+            _mikado_call("deliveries.asmx", "Delivery_Info", {**auth, "DeliveryID": number}), "cDeliveryLine")
+    return _MIKADO_INFO_CACHE[key]
+
+
+def mikado_orders(provider, since, max_deliveries=400):
     """Как ЗаказыМикадоДляКонтроля в 1С: корзина (Basket_List) — заказанное и ещё не отгруженное
     (Zakaz — под заказ, Stock — со склада Микадо, Otkaz — отказ); отгрузки за период
     (deliveries.asmx: Delivery_List + Delivery_Info) — уже отгруженное. Одна позиция (ZakazID) — один раз."""
@@ -467,8 +481,7 @@ def mikado_orders(provider, since, max_deliveries=80):
     for delivery in deliveries[-max_deliveries:]:
         number = delivery.get("DelNumber", "")
         date = _date(delivery.get("DelDate"), "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
-        info = _mikado_call("deliveries.asmx", "Delivery_Info", {**auth, "DeliveryID": number})
-        for line in _mikado_records(info, "cDeliveryLine"):
+        for line in _mikado_delivery_lines(auth, number):
             zakaz_id = line.get("ZakazID", "")
             if zakaz_id:
                 if zakaz_id in seen:

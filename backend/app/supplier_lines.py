@@ -364,12 +364,15 @@ def apply_rows(session, organization_id, provider_name, rows):
 def refresh_from_supplier(fetch_rows, days=60):
     """refresh-функция для поставщика со строками заказов (integrations/supplier_orders.py)."""
     def refresh(session, organization_id, provider, provider_name):
-        has_open = session.query(db.SupplierLine.id).filter(
+        oldest = session.query(db.SupplierLine.submitted_at).filter(
             db.SupplierLine.organization_id == organization_id, db.SupplierLine.provider == provider_name,
-            db.SupplierLine.closed.is_(False)).first()
-        if not has_open:
+            db.SupplierLine.closed.is_(False)).order_by(db.SupplierLine.submitted_at.asc()).first()
+        if not oldest:
             return 0  # не дёргаем поставщика зря
-        since = (db.utcnow() - datetime.timedelta(days=days)).date()
+        # Период — от самой старой открытой позиции (с запасом в день), но не больше days:
+        # меньше страниц и отгрузок у поставщика.
+        floor = db.utcnow() - datetime.timedelta(days=days)
+        since = (max(oldest[0] or floor, floor) - datetime.timedelta(days=1)).date()
         return apply_rows(session, organization_id, provider_name, fetch_rows(provider, since))
     return refresh
 

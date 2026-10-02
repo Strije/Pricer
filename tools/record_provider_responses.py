@@ -217,7 +217,7 @@ def block_ordering(providers):
                 setattr(provider, name, refuse)
 
 
-PHONE_RE = re.compile(r"(?<!\d)(?:\+7|8)[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
+PHONE_RE = re.compile(r"(?<!\d)(?:\+7|7|8)[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
 
 
 def mask_phones(text):

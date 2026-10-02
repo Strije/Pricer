@@ -54,6 +54,7 @@ def http(monkeypatch):
     def install(*responses):
         fake = FakeHttp(*[r if isinstance(r, Response) else Response(r) for r in responses])
         monkeypatch.setattr(so, "_session", fake)
+        so._MIKADO_INFO_CACHE.clear()
         return fake
     return install
 
@@ -210,6 +211,18 @@ def test_mikado_basket_and_deliveries(http):
     assert shipped["status"].startswith("отгружено") and shipped["date"] == "2026-10-01T18:00:00"
     assert shipped["brand"] == "XZK" and shipped["comment"] == "ORD-20261001-0003"
     assert normalize_status(shipped["status"]) == "in_transit"
+
+
+def test_mikado_delivery_contents_cached(http):
+    http(MIKADO_BASKET, MIKADO_LIST, MIKADO_INFO)
+    first = so.mikado_orders(P(client_id="1", password="p"), SINCE)
+    fake = FakeHttp(Response(MIKADO_BASKET), Response(MIKADO_LIST))  # без Delivery_Info
+    so._session = fake
+    try:
+        assert so.mikado_orders(P(client_id="1", password="p"), SINCE) == first
+    finally:
+        del so._session  # monkeypatch вернёт исходную функцию
+    assert len(fake.calls) == 2
 
 
 def test_mikado_mirror_on_404(http):
