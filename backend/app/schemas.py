@@ -37,6 +37,12 @@ class AccountRequest(BaseModel):
     secrets: dict = Field(default_factory=dict)
 
 
+class OrderOptionsRequest(BaseModel):
+    # Несохранённые значения открытых полей из формы (например, выбранный VKORG или юрлицо):
+    # от них зависят списки ниже. Секретные поля так не передаются — берутся из базы.
+    values: dict = Field(default_factory=dict)
+
+
 class FileRow(BaseModel):
     brand: str = Field(default="", max_length=80)
     article: str = Field(min_length=1, max_length=80)

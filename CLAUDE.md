@@ -90,7 +90,8 @@ backend/
     search.py               выдача: offer_view, бренд голосованием (choose_brand), гарантии, подсветки
     orders.py               заказы: черновик → перепроверка → отправка, журнал
     supplier_lines.py       сопоставление позиций с кабинетами поставщиков, статусы, отказы
-    supplier_catalog.py     описание разделов настроек поставщиков/сервисов (поля, секреты)
+    supplier_catalog.py     описание разделов настроек поставщиков/сервисов (поля, секреты, профиль заказа)
+    order_profile.py        профиль заказа: варианты доставки/оплаты/адресов из справочников поставщика
     quotes.py               «Подбор» для клиента: варианты, ссылка, выбор, оплата
     service_template.py     «ТО по машине»: шаблон работ → OEM-номера → варианты
     prices.py               прайс-листы: источники, разметка колонок, загрузка, PriceDbProvider
@@ -150,7 +151,8 @@ docs/MIGRATION_PLAN.md      план, решения, статус по этап
 - вход: `/api/auth/*` (register, login, password, logout), `/health`
 - поиск: `/api/find`, `/api/jobs/{id}/events` (SSE), `/api/find/{id}/results`, `/api/stats/popular`,
   `/api/me/favorites`, `/api/brands/warranty`; VIN/Laximo: `/api/vin/find|groups|details`
-- поставщики и сервисы: `/api/suppliers*`, `/api/suppliers/{id}/check`, `/api/services/{section}/check`,
+- поставщики и сервисы: `/api/suppliers*`, `/api/suppliers/{id}/check`, `/api/suppliers/{id}/order-options`,
+  `/api/services/{section}/check`,
   `/api/services/mailbox/{id}/check`, `/api/import/settings`
 - прайсы: `/api/prices` (CRUD), `/{id}/preview`, `/{id}/load`, `/api/prices/import-desktop`
 - заказы: `/api/orders*` (recheck, submit-preview, submit, replace/skip/restore, log),

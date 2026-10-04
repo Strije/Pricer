@@ -8,26 +8,41 @@
 import re
 
 # Поле: (имя, подпись, тип). Тип "secret" — шифруется и никогда не отдаётся через API.
+# Тип "choice" — значение из справочника поставщика: варианты загружает кнопка «Загрузить у поставщика»
+# (app/order_profile.py), сохраняется код варианта, как в выпадающих списках десктопа.
+# order_fields — профиль заказа (доставка, оплата, адрес, реквизиты): поля и подписи — из settings_page десктопа.
 CATALOG = {
     "profit_league": {
         "title": "Profit-League",
         "fields": [("api_key", "API-ключ", "secret")],
+        "order_fields": [("create_order", "Оформлять заказ после добавления в корзину", "bool"),
+                         ("order_method", "Способ доставки", "choice"), ("order_payment", "Способ оплаты", "choice"),
+                         ("order_point", "Торговая точка", "choice"), ("order_address", "Адрес торговой точки", "choice"),
+                         ("order_pickup_point", "Точка самовывоза", "choice")],
     },
     "favorit": {
         "title": "Фаворит",
         "fields": [("api_key", "API-ключ", "secret"), ("developer_key", "Ключ разработчика", "secret"),
                    ("include_analogues", "Искать аналоги", "bool")],
+        # у Фаворита справочников для этих полей десктоп не загружает — вводятся кодами
+        "order_fields": [("trade_point", "Торговая точка", "text"), ("payment_type", "Способ оплаты (1/2/3)", "text"),
+                         ("delivery_type", "Способ получения (1/2)", "text"),
+                         ("transport_type", "Способ доставки (0/1/2/3)", "text")],
     },
     "armtek": {
         "title": "Armtek",
         "fields": [("login", "Логин", "secret"), ("password", "Пароль", "secret"),
-                   ("vkorg", "Сбытовая организация (VKORG)", "text"), ("kunnr", "Покупатель (KUNNR)", "text"),
+                   ("vkorg", "Сбытовая организация (VKORG)", "choice"), ("kunnr", "Покупатель (KUNNR)", "choice"),
                    ("allowed_warehouses", "Разрешённые склады", "text")],
+        "order_fields": [("kunnr_we", "Грузополучатель", "choice"), ("use_pickup", "Самовывоз", "bool"),
+                         ("incoterms", "Пункт выдачи для самовывоза", "choice"), ("kunnr_za", "Адрес доставки", "choice"),
+                         ("parnr", "Контактное лицо", "choice"), ("vbeln", "Договор", "choice")],
     },
     "forum_auto": {
         "title": "Forum-Auto",
         "fields": [("login", "Логин", "secret"), ("password", "Пароль", "secret"),
                    ("include_crosses", "Искать аналоги", "bool"), ("allowed_warehouses", "Разрешённые склады", "text")],
+        "order_fields": [("external_order_id", "ID заказа в вашей системе", "text")],
     },
     "mikado": {
         "title": "Mikado",
@@ -37,21 +52,34 @@ CATALOG = {
         "title": "ABSTD",
         "fields": [("login", "Логин", "secret"), ("password", "Пароль", "secret"),
                    ("agreement_id", "Договор", "text"), ("allowed_warehouses", "Разрешённые склады", "text")],
+        "order_fields": [("cart_id", "ID корзины", "text"), ("delivery_address_id", "Адрес доставки", "choice"),
+                         ("delivery_type_id", "Способ доставки", "choice")],
     },
     "rossko": {
         "title": "Rossko",
-        "fields": [("key1", "KEY1", "secret"), ("key2", "KEY2", "secret"), ("delivery_id", "Доставка", "text"),
+        "fields": [("key1", "KEY1", "secret"), ("key2", "KEY2", "secret"),
                    ("allowed_warehouses", "Разрешённые склады", "text")],
+        # контакт и телефон — личные данные: хранятся зашифрованными, как при импорте settings.json
+        "order_fields": [("delivery_id", "Способ доставки", "choice"), ("address_id", "Адрес доставки", "choice"),
+                         ("payment_id", "Способ оплаты", "choice"), ("requisite_id", "Реквизиты", "choice"),
+                         ("contact_name", "Контакт", "secret"), ("contact_phone", "Телефон", "secret")],
     },
     "avtoto": {
         "title": "Avtoto",
         "fields": [("client_id", "Номер клиента", "secret"), ("login", "Логин", "secret"),
-                   ("password", "Пароль", "secret"), ("excluded_warehouses", "Исключённые склады", "text")],
+                   ("password", "Пароль", "secret"), ("include_crosses", "Искать аналоги", "bool"),
+                   ("excluded_warehouses", "Исключённые склады", "text")],
     },
     "tiss_tmparts": {
         "title": "TISS",
-        "fields": [("api_key", "API-ключ", "secret"), ("contract_id", "Договор", "text"),
-                   ("outlet_id", "Точка доставки", "text"), ("allowed_warehouses", "Разрешённые склады", "text")],
+        "fields": [("api_key", "API-ключ", "secret"), ("legal_organization_id", "Юрлицо", "choice"),
+                   ("contract_id", "Договор", "choice"), ("outlet_id", "Точка доставки", "choice"),
+                   ("warehouse_mode", "Склады: 0 — все, 1 — только домашние", "text"),
+                   ("allowed_warehouses", "Разрешённые склады", "text"), ("include_analogues", "Искать аналоги", "bool")],
+        "order_fields": [("delivery_type", "Тип доставки заказа", "text"), ("phone_number", "Телефон для заказа", "secret"),
+                         ("one_time_delivery", "Единая доставка", "bool"),
+                         ("not_group_reserves", "Не группировать резервы", "bool"),
+                         ("express_delivery", "Экспресс-доставка", "bool")],
     },
     "tradesoft": {
         "title": "Tradesoft (Автоформула)",
@@ -122,9 +150,14 @@ _SECRET_NAME = re.compile(r"(?i)(key|pass|login|user|token|secret|phone|client_i
 _SKIP = re.compile(r"(?i)(_label$|^first_run$|^expected_ip$|^managers$)")
 
 
-def secret_fields(section):
+def section_fields(section):
+    """Все поля раздела: подключение и профиль заказа."""
     spec = CATALOG.get(section, {})
-    return {name for name, _label, kind in spec.get("fields", []) if kind == "secret"}
+    return list(spec.get("fields", [])) + list(spec.get("order_fields", []))
+
+
+def secret_fields(section):
+    return {name for name, _label, kind in section_fields(section) if kind == "secret"}
 
 
 def is_secret(section, key, value):
@@ -172,6 +205,8 @@ def compose_settings(org, accounts):
 
 
 def public_catalog():
+    from app.order_profile import LOADERS
+
     return {
         section: {
             "title": spec["title"],
@@ -179,7 +214,11 @@ def public_catalog():
             "service": bool(spec.get("service")),
             # у сервисов (Laximo, ЮKassa) общих полей поставщика нет — свои карточки в «Сервисах»
             "fields": [{"name": n, "label": label, "type": kind}
-                       for n, label, kind in ([] if spec.get("service") else COMMON_FIELDS) + spec["fields"]],
+                       for n, label, kind in ([] if spec.get("service") else COMMON_FIELDS) + spec["fields"]]
+                      + [{"name": n, "label": label, "type": kind, "group": "order"}
+                         for n, label, kind in spec.get("order_fields", [])],
+            # варианты для полей "choice" можно загрузить у поставщика
+            "order_options": section in LOADERS,
         }
         for section, spec in CATALOG.items()
     }

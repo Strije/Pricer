@@ -184,6 +184,9 @@
               grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0 14px; }
   form.acc-body { display: grid; }
   .acc-body > .row, .acc-body > .note, .acc-body > [data-preview-box], .acc-body > .acc-msg { grid-column: 1 / -1; }
+  .acc-body > .acc-sub { grid-column: 1 / -1; display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap;
+                         margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .acc-sub .msg { margin: 0; }
   .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; padding: 0; }
   .switch input { opacity: 0; width: 0; height: 0; }
   .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: .15s; }
@@ -679,13 +682,29 @@ $("sup-check-all").onclick = async () => {
   }));
   $("sup-check-all").disabled = false; $("sup-check-all").textContent = "Проверить всех";
 };
+// Списки, которые зависят от выбора выше: при смене родителя варианты загружаются заново.
+const CHOICE_DEPENDENTS = {
+  armtek: {vkorg: ["kunnr", "kunnr_we", "kunnr_za", "incoterms", "parnr", "vbeln"]},
+  tiss_tmparts: {legal_organization_id: ["contract_id", "outlet_id"], contract_id: ["outlet_id"]},
+};
+function choiceOptions(select, items, current) {
+  // сохранённый код, которого нет в справочнике поставщика, не теряем — показываем отдельно
+  const list = [{value: "", label: "— не выбрано —"}, ...(items || [])];
+  if (current && !list.some((o) => o.value === current)) list.push({value: current, label: `${current} (нет в справочнике поставщика)`});
+  select.innerHTML = list.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+  select.value = current || "";
+}
 function supplierCard(acc) {
   const spec = catalog[acc.section] || {fields: []};
   const card = document.createElement("form"); card.className = "card acc-body";
-  const inputs = spec.fields.map((f) => {
+  const field = (f) => {
     const id = `f-${acc.id}-${f.name}`, val = acc.config[f.name];
     if (f.name === "enabled") return `<input type="checkbox" id="${id}" ${val === false ? "" : "checked"} hidden>`;  // переключатель — в строке
     if (f.type === "bool") return `<label class="check"><input type="checkbox" id="${id}" ${val ? "checked" : ""}> ${esc(f.label)}</label>`;
+    if (f.type === "choice") {  // варианты — кнопкой «Загрузить у поставщика»; до загрузки виден сохранённый код
+      const cur = String(val ?? "");
+      return `<label>${esc(f.label)} <select id="${id}" data-choice="${esc(f.name)}"><option value="">— не выбрано —</option>${cur ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ""}</select></label>`;
+    }
     if (f.type === "secret") {
       const set = acc.secrets_set.includes(f.name);
       if (f.name === "url_profiles") return set ? `<div class="note">${esc(f.label)}: сохранены (меняются импортом)</div>` : "";
@@ -693,10 +712,44 @@ function supplierCard(acc) {
       return `<label>${esc(f.label)} <input type="password" id="${id}" autocomplete="new-password" placeholder="${set ? "сохранено — оставьте пустым" : ""}"></label>`;
     }
     return `<label>${esc(f.label)} <input type="${f.type === "int" ? "number" : "text"}" id="${id}" value="${esc(val ?? "")}"></label>`;
-  }).join("");
-  card.innerHTML = `${inputs}
+  };
+  const main = spec.fields.filter((f) => f.group !== "order"), order = spec.fields.filter((f) => f.group === "order");
+  const loader = spec.order_options ? `<button type="button" class="secondary small" data-opts>Загрузить у поставщика</button>` : "";
+  const sub = order.length || loader
+    ? `<div class="acc-sub"><strong>Оформление заказа</strong>${loader}<span class="msg" data-opts-msg></span></div>` : "";
+  card.innerHTML = `${main.map(field).join("")}${sub}${order.map(field).join("")}
     <div class="row"><button>Сохранить</button><button type="button" class="danger" data-del>Удалить</button><span class="msg"></span></div>`;
-  const msg = card.querySelector(".msg");
+  const msg = card.querySelector(".msg:not([data-opts-msg])");
+  const el = (name) => card.querySelector(`#f-${acc.id}-${name}`);
+  async function loadOptions() {
+    const button = card.querySelector("[data-opts]"), out = card.querySelector("[data-opts-msg]");
+    const values = {};  // несохранённый выбор в форме: от него зависят списки ниже
+    for (const f of spec.fields) if (f.type === "choice" || f.type === "text") { const e = el(f.name); if (e) values[f.name] = e.value; }
+    button.disabled = true; out.className = "msg"; out.textContent = "Загружаю…";
+    try {
+      const r = await api(`/api/suppliers/${acc.id}/order-options`, {method: "POST", body: {values}});
+      for (const [name, items] of Object.entries(r.options || {})) {
+        const s = el(name); if (!s || s.tagName !== "SELECT") continue;
+        choiceOptions(s, items, s.value || (r.defaults || {})[name] || "");
+      }
+      for (const [name, value] of Object.entries(r.defaults || {})) {  // текстовые поля — только пустые
+        const e = el(name); if (e && e.tagName === "INPUT" && e.type === "text" && !e.value) e.value = value;
+      }
+      out.className = r.ok ? "msg ok" : "msg";
+      out.textContent = r.ok ? `${r.message}. Проверьте выбор и нажмите «Сохранить».` : r.message;
+    } catch (err) { out.className = "msg"; out.textContent = err.message; }
+    button.disabled = false;
+  }
+  if (spec.order_options) {
+    card.querySelector("[data-opts]").onclick = loadOptions;
+    for (const [parent, children] of Object.entries(CHOICE_DEPENDENTS[acc.section] || {})) {
+      const p = el(parent); if (!p) continue;
+      p.addEventListener("change", () => {
+        for (const c of children) { const s = el(c); if (s) s.value = ""; }
+        loadOptions();
+      });
+    }
+  }
   card.addEventListener("submit", async (e) => {
     e.preventDefault();
     const config = {}, secrets = {};

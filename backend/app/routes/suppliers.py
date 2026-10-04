@@ -8,7 +8,7 @@ from app import db
 from app import supplier_catalog as catalog
 from app.redact import Redactor
 from app.routes.common import _account_view, SETTINGS_UPLOAD_LIMIT
-from app.schemas import AccountRequest
+from app.schemas import AccountRequest, OrderOptionsRequest
 
 
 def setup(app, ctx):
@@ -148,6 +148,42 @@ def setup(app, ctx):
             account.status = status
             session.commit()
         return status
+
+    @app.post("/api/suppliers/{account_id}/order-options")
+    def supplier_order_options(account_id: int, payload: OrderOptionsRequest | None = None, user=Depends(admin_user)):
+        """Варианты для профиля заказа (доставка, оплата, адреса, реквизиты) из справочников поставщика,
+        как кнопка проверки в настройках десктопа. Только чтение, ничего не сохраняет."""
+        import concurrent.futures
+
+        from app.order_profile import LOADERS, load_options
+
+        with Session() as session:
+            account = session.get(db.SupplierAccount, account_id)
+            if account is None or account.organization_id != user["organization_id"]:
+                raise HTTPException(status_code=404, detail="поставщик не найден")
+            section = account.section
+            secrets = box.open(account.secrets_sealed)
+            cfg = {**(account.config or {}), **secrets}
+        if section not in LOADERS:
+            raise HTTPException(status_code=400, detail="у этого поставщика нет справочников для заказа")
+        secret_names = catalog.secret_fields(section)
+        for key, value in ((payload.values if payload else None) or {}).items():
+            if key not in secret_names and isinstance(value, (str, int, float, bool)):
+                cfg[key] = value
+        redactor = Redactor(list(secrets.values()) + ([replay_module_dummy()] if replay_mode else []))
+        started = time.monotonic()
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            result = pool.submit(load_options, section, cfg).result(timeout=45)
+        except concurrent.futures.TimeoutError:
+            result = {"ok": False, "message": "поставщик не ответил за 45 секунд", "options": {}, "defaults": {}}
+        except Exception as exc:
+            result = {"ok": False, "message": f"{type(exc).__name__}: {exc}", "options": {}, "defaults": {}}
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        result["message"] = redactor.text(str(result.get("message") or ""))[:300]
+        result["seconds"] = round(time.monotonic() - started, 1)
+        return redactor.messages(result)
 
     def _apply_account(account, payload):
         config = dict(account.config or {})
