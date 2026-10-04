@@ -36,7 +36,7 @@
 ```bash
 cd backend
 pip install -e ".[dev]"            # или pip install -r requirements.txt
-python -m pytest -q                # ~210 тестов, без сети
+python -m pytest -q                # ~540 тестов, без сети (из них ~330 — тесты десктопа)
 PRICER_REPLAY=1 uvicorn app.server:app --port 8000   # демо на записанных ответах
 uvicorn app.server:app --port 8000                   # настоящие поставщики
 python -m app.manage list | create-org | reset-password   # управление организациями
@@ -165,6 +165,10 @@ docs/MIGRATION_PLAN.md      план, решения, статус по этап
 ## Тесты
 
 - `tests/test_server.py` — фикстуры `app_factory`, `register`, заголовок `H`, `read_events` для SSE.
+- `tests/desktop/` — тесты десктопа (`C:\Price\tests`), перенесены почти дословно и гоняются на `core/`.
+  Окно `SkitchenApp` в них — движок (`_compat.py` связывает сигналы окна с обратными вызовами
+  движка); справочник брендов и папка настроек — во временной папке (`conftest.py`). Тесты
+  экранов Qt не переносились. `xfail(strict=True)` отмечает то, что ещё не перенесено в веб.
 - Записи ответов поставщиков воспроизводятся `tests/replay.py` / `app/replay.py`; новые записи —
   только через `tools/record_provider_responses.py` (обезличивание обязательно, проверить глазами).
 - Внешние сервисы (ЮKassa, IMAP, Laximo, 1С) в тестах подменяются.
