@@ -68,6 +68,9 @@ def create_app(var_dir=None, database_url=None):
         if not os.path.exists(dst):
             shutil.copy(os.path.join(BACKEND, "data", name), dst)
     brand_aliases_module.get_brand_storage_dir = lambda: brand_dir
+    # Справочник синонимов ABCP (brand_reference_abcp.json) десктоп носит в resources/; здесь он лежит
+    # в той же папке данных и ставится командой import-brands (app/brand_reference.py).
+    brand_aliases_module.get_bundled_resource_dir = lambda: brand_dir
     os.environ.setdefault("PROCENKA_CONFIG_DIR", os.path.join(var_dir, "config"))
 
     replay_value = os.environ.get("PRICER_REPLAY", "")

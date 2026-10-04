@@ -3,6 +3,7 @@
     python -m app.manage create-org "Автодруг" admin@example.com   # организация и её администратор
     python -m app.manage reset-password admin@example.com          # новый пароль (печатается один раз)
     python -m app.manage list                                      # организации и пользователи
+    python -m app.manage import-brands report.xls                  # справочник синонимов брендов ABCP
 
 Пароль генерируется случайный и показывается один раз — регистрацию на публичном сервере можно
 выключить (PRICER_ALLOW_SIGNUP=0), а организации заводить отсюда.
@@ -66,6 +67,21 @@ def list_orgs():
             print(f"{org.id:>4}  {org.name}  —  {users or 'нет пользователей'}  · поставщиков: {len(org.accounts)}")
 
 
+def import_brands(path):
+    """Справочник синонимов брендов ABCP — в папку данных (та же, что у сервера: PRICER_DATA_DIR или var/brands)."""
+    from app.brand_reference import install
+
+    var_dir = os.environ.get("PRICER_VAR_DIR") or os.path.join(HERE, "var")
+    brand_dir = os.environ.get("PRICER_DATA_DIR") or os.path.join(var_dir, "brands")
+    try:
+        result = install(path, brand_dir)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"не получилось: {exc}")
+    change = "" if result["added"] is None else f" (новых {result['added']}, убрано {result['removed']})"
+    print(f"Справочник брендов: {result['brands']} брендов, {result['aliases']} синонимов{change} -> {result['path']}")
+    print("Сервер подхватит его после перезапуска.")
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["create-org"] and len(args) == 3:
@@ -74,6 +90,8 @@ def main(argv=None):
         reset_password(args[1])
     elif args[:1] == ["list"]:
         list_orgs()
+    elif args[:1] == ["import-brands"] and len(args) == 2:
+        import_brands(args[1])
     else:
         print(__doc__)
         return 2

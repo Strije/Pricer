@@ -43,7 +43,7 @@ python -m app.manage list | create-org | reset-password   # управление
 python tools/gen_engine.py <путь к main.py десктопа>       # пересобрать engine.py (из корня)
 ```
 
-Сервер: `deploy/setup.sh` (`install [адрес] [email]`, `update`, `create-org`, `reset-password`,
+Сервер: `deploy/setup.sh` (`install [адрес] [email]`, `update`, `create-org`, `reset-password`, `import-brands`,
 `backup`, `restore`, `status`), подробно — `deploy/README.md`. Сейчас: VPS 109.73.199.217,
 https://109-73-199-217.sslip.io, nginx → 127.0.0.1:8095, systemd `pricer.service`, PostgreSQL 16,
 сторож с Telegram (`pricer-watchdog.timer`), копии в `/var/backups/pricer`.
@@ -117,6 +117,9 @@ backend/
     laximo.py               подбор по VIN/FRAME/госномеру
     onec_odata.py, outbox.py  выгрузка в 1С через OData (заготовка, очередь)
   data/                     справочники брендов и гарантий (без секретов)
+                            Синонимы брендов ABCP (brand_reference_abcp.json, ~19 тыс.) в git не входят:
+                            ставятся в папку данных командой import-brands (app/brand_reference.py).
+                            Без них веб узнаёт ~10% написаний бренда вместо ~99% — на сервере проверять.
   tests/                    pytest; fixtures/ — обезличенные записи ответов (*.jsonl.gz)
   var/                      база, ключ, кэши — в .gitignore
 tools/

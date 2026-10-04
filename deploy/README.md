@@ -28,6 +28,7 @@ bash pricer-setup.sh create-org "Автодруг" ваш@email
 | `bash pricer-setup.sh backup` | копия прямо сейчас |
 | `bash pricer-setup.sh restore /var/backups/pricer/pricer-ГГГГММДД.tar.gz` | восстановление |
 | `bash pricer-setup.sh reset-password email` | новый пароль пользователю |
+| `bash pricer-setup.sh import-brands report.xls` | справочник синонимов брендов из админки ABCP (.xls/.xlsx или JSON десктопа), перезапуск |
 
 ## Что где
 - `/etc/pricer.env` — настройки (пароль базы, адрес), права 600. В git только `pricer.env.example`.

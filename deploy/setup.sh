@@ -10,6 +10,7 @@
 #   bash pricer-setup.sh create-org "Автодруг" you@mail.ru          # 2) организация и администратор
 #   bash pricer-setup.sh update                                     # потом: свежий код из git
 #   bash pricer-setup.sh backup | restore ФАЙЛ | status
+#   bash pricer-setup.sh import-brands report.xls                  # справочник брендов ABCP (выгрузка из админки)
 #
 # Свой домен должен уже указывать на этот сервер (DNS, запись A), иначе сертификат не выпустится.
 set -euo pipefail
@@ -185,6 +186,17 @@ cmd_reset_password() {
     manage reset-password "$1"
 }
 
+cmd_import_brands() {  # синонимы брендов ABCP -> $DATA/brands; без них веб узнаёт ~10% написаний брендов
+    local file="${1:-}" tmp
+    [ -f "$file" ] || die "использование: import-brands отчёт.xls (выгрузка справочника брендов из админки ABCP)"
+    tmp=$(mktemp -d)
+    cp "$file" "$tmp/" && chown -R pricer:pricer "$tmp"
+    manage import-brands "$tmp/$(basename "$file")"
+    rm -rf "$tmp"
+    systemctl restart pricer
+    health
+}
+
 cmd_backup() {
     say "Копия сейчас"
     rm -f "$BACKUPS/pricer-$(date +%Y%m%d).tar.gz"
@@ -224,8 +236,9 @@ case "${1:-}" in
     update) cmd_update ;;
     create-org) shift; cmd_create_org "$@" ;;
     reset-password) shift; cmd_reset_password "$@" ;;
+    import-brands) shift; cmd_import_brands "$@" ;;
     backup) cmd_backup ;;
     restore) shift; cmd_restore "$@" ;;
     status) cmd_status ;;
-    *) sed -n '2,13p' "$0"; exit 2 ;;
+    *) sed -n '2,14p' "$0"; exit 2 ;;
 esac
