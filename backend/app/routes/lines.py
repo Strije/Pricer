@@ -20,10 +20,16 @@ def setup(app, ctx):
     # ----- заказы поставщикам -----
 
     def sync_all_lines(organization_id):
-        orders = engine_for(organization_id).order_store.list_orders()
+        # Заказы из десктопа сведены в позиции при импорте и только за последние 60 дней
+        # (app/desktop_import.py): здесь их не трогаем — иначе завелись бы и старые позиции без статусов.
+        from sqlalchemy import or_
+
         with Session() as session:
-            for order in orders:
-                lines_service.sync_order(session, organization_id, order)
+            rows = session.query(db.Order.data).filter(
+                db.Order.organization_id == organization_id,
+                or_(db.Order.source.is_(None), db.Order.source != "desktop")).order_by(db.Order.id.desc()).all()
+            for (data,) in rows:
+                lines_service.sync_order(session, organization_id, dict(data or {}))
             session.commit()
 
     @app.get("/api/supplier-lines")

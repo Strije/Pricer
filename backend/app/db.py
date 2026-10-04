@@ -72,6 +72,8 @@ class Order(Base):
     order_id: Mapped[str] = mapped_column(String(40))  # ORD-ГГГГММДД-NNNN
     status: Mapped[str] = mapped_column(String(30), default="draft")
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+    # "desktop" — перенесён из десктопа (app/desktop_import.py): в позиции у поставщиков сведён при импорте
+    source: Mapped[str] = mapped_column(String(20), default="")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     # Блокировка отправки в базе: повторный запуск отправки того же заказа невозможен даже
     # из другого процесса. submit_targets — какие позиции уходят (для восстановления после сбоя).

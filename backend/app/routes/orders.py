@@ -9,6 +9,8 @@ from app import supplier_lines as lines_service
 from app.routes.common import _file_row_payload, Job, _offer, ORDER_FILE_LIMIT, ORDER_FILE_ROWS, _order_view
 from app.schemas import CreateOrderRequest, FileSearchRequest, ItemsRequest, ReplaceRequest
 
+DESKTOP_HISTORY_LIMIT = 60 * 1024 * 1024  # за nginx — 10 МБ на запрос (client_max_body_size)
+
 
 def setup(app, ctx):
     Session, current_user, engine_for = ctx.Session, ctx.current_user, ctx.engine_for
@@ -238,3 +240,28 @@ def setup(app, ctx):
         variant = {**(offer.get("snapshot") or {}), **{k: v for k, v in offer.items() if k != "snapshot"}}
         return _item_action(user, order_id, index,
                             lambda eng: eng._replace_order_item_with_variant(order_id, index, variant))
+
+    # ----- история десктопа: заказы и журнал отправок -----
+
+    @app.post("/api/import/desktop-history")
+    async def import_desktop_history(files: list[UploadFile] = File(...), user=Depends(ctx.admin_user)):
+        """Заказы десктопа (config/orders — лучше ZIP-архивом папки) и order_history.json. Повторять можно:
+        тот же заказ обновится, журнал не задвоится (app/desktop_import.py)."""
+        from app import desktop_import
+
+        loaded, total = [], 0
+        for upload in files:
+            raw = await upload.read(DESKTOP_HISTORY_LIMIT + 1)
+            total += len(raw)
+            if total > DESKTOP_HISTORY_LIMIT:
+                raise HTTPException(status_code=413, detail="файлы слишком большие — загрузите ZIP-архивом или частями")
+            loaded.append((upload.filename or "", raw))
+        try:
+            orders, journal, skipped = desktop_import.read_files(loaded)
+        except desktop_import.DesktopImportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if not orders and not journal:
+            raise HTTPException(status_code=400, detail="заказов десктопа (ORD-….json) и order_history.json в файлах нет")
+        engine = engine_for(user["organization_id"])  # его redactor знает пароли поставщиков организации
+        result = desktop_import.import_history(Session, user["organization_id"], orders, journal, engine.redactor)
+        return {**result, "skipped": skipped[:20], "skipped_count": len(skipped)}

@@ -92,6 +92,7 @@ backend/
     supplier_lines.py       сопоставление позиций с кабинетами поставщиков, статусы, отказы
     supplier_catalog.py     описание разделов настроек поставщиков/сервисов (поля, секреты, профиль заказа)
     order_profile.py        профиль заказа: варианты доставки/оплаты/адресов из справочников поставщика
+    desktop_import.py       импорт заказов и журнала десктопа (ZIP config/orders + order_history.json)
     quotes.py               «Подбор» для клиента: варианты, ссылка, выбор, оплата
     service_template.py     «ТО по машине»: шаблон работ → OEM-номера → варианты
     prices.py               прайс-листы: источники, разметка колонок, загрузка, PriceDbProvider
@@ -158,7 +159,7 @@ docs/MIGRATION_PLAN.md      план, решения, статус по этап
   `/api/services/{section}/check`,
   `/api/services/mailbox/{id}/check`, `/api/import/settings`
 - прайсы: `/api/prices` (CRUD), `/{id}/preview`, `/{id}/load`, `/api/prices/import-desktop`
-- заказы: `/api/orders*` (recheck, submit-preview, submit, replace/skip/restore, log),
+- заказы: `/api/orders*` (recheck, submit-preview, submit, replace/skip/restore, log), `/api/import/desktop-history`,
   `/api/order-file/parse|search`, корзина `/api/cart*` (`/checkout`)
 - кабинеты поставщиков: `/api/supplier-lines*` (`/refresh`, `/{id}/status`), `/api/supplier-stats`
 - клиенты и машины: `/api/clients*`, `/api/vehicles/{id}`; настройки организации `/api/org/settings`

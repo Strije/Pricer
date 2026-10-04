@@ -479,6 +479,17 @@
       <div class="note">Заменяет всех поставщиков организации и переносит наценки и фильтры. Пароли и ключи шифруются на сервере.</div>
       <div class="msg" id="import-msg"></div>
     </div>
+    <div style="margin-top:12px">
+      <div class="row">
+        <strong>Заказы и журнал из десктопа</strong>
+        <input type="file" id="history-files" accept=".zip,.json,application/zip,application/json" multiple>
+        <button class="secondary" id="history-go">Импортировать</button>
+      </div>
+      <div class="note">ZIP-архив папки <code>config\orders</code> десктопа и файл <code>config\order_history.json</code> (можно в том же архиве).
+        Позиции, отправленные за последние 60 дней, появятся в «Заказах поставщикам» — статусы по ним придут из кабинетов.
+        Повторять можно: заказы обновятся, журнал не задвоится. За раз — до 10 МБ, большой архив загрузите частями.</div>
+      <div class="msg" id="history-msg"></div>
+    </div>
     <div class="row" style="margin-top:12px">
       <strong>Добавить поставщика</strong>
       <select id="add-section"></select>
@@ -782,6 +793,22 @@ $("import-go").onclick = async () => {
     $("import-msg").className = "msg ok"; $("import-msg").textContent = `Импортировано поставщиков: ${r.accounts}`;
     $("import-file").value = ""; loadSuppliers(); boot();
   } catch (err) { $("import-msg").className = "msg"; $("import-msg").textContent = err.message; }
+};
+$("history-go").onclick = async () => {
+  const files = [...$("history-files").files], msg = $("history-msg");
+  if (!files.length) { msg.className = "msg"; msg.textContent = "Выберите ZIP-архив заказов или JSON-файлы"; return; }
+  const fd = new FormData(); files.forEach((f) => fd.append("files", f));
+  $("history-go").disabled = true; msg.className = "msg"; msg.textContent = "Загружаю…";
+  try {
+    const r = await api("/api/import/desktop-history", {method: "POST", body: fd});
+    const parts = [`заказов новых ${r.orders_new}, обновлено ${r.orders_updated}, без изменений ${r.orders_same}`];
+    if (r.orders_renamed) parts.push(`с занятым номером (добавлено «-D») ${r.orders_renamed}`);
+    parts.push(`позиций в «Заказах поставщикам» ${r.lines}`, `журнал: новых ${r.journal_new}, уже были ${r.journal_same}`);
+    if (r.skipped_count) parts.push(`пропущено файлов ${r.skipped_count}`);
+    msg.className = "msg ok"; msg.textContent = "Готово: " + parts.join("; ");
+    $("history-files").value = "";
+  } catch (err) { msg.className = "msg"; msg.textContent = err.message; }
+  $("history-go").disabled = false;
 };
 boot();
 
