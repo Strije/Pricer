@@ -25,6 +25,7 @@ bash pricer-setup.sh create-org "Автодруг" ваш@email
 |---|---|
 | `bash pricer-setup.sh update` | свежий код из git, перезапуск, проверка |
 | `bash pricer-setup.sh status` | сервис, версия, последние копии |
+| `bash pricer-setup.sh doctor` | сводка для разбора сбоя: сервис, база и её журнал, память, swap, диск, нехватка памяти, ошибки за сутки (пароли скрыты — вывод можно прислать) |
 | `bash pricer-setup.sh backup` | копия прямо сейчас |
 | `bash pricer-setup.sh restore /var/backups/pricer/pricer-ГГГГММДД.tar.gz` | восстановление |
 | `bash pricer-setup.sh reset-password email` | новый пароль пользователю |

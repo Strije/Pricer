@@ -246,6 +246,10 @@ def make_sessionmaker(url):
     kwargs = {"json_serializer": lambda obj: json.dumps(obj, ensure_ascii=False)}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        # после перезапуска PostgreSQL старые соединения пула мертвы: проверяем перед выдачей,
+        # иначе первые запросы после восстановления базы падали бы с ошибкой 500
+        kwargs["pool_pre_ping"] = True
     engine = create_engine(url, **kwargs)
     Base.metadata.create_all(engine)
     add_missing_columns(engine)

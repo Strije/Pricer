@@ -551,6 +551,7 @@ async function api(path, opts = {}) {
   const data = resp.headers.get("content-type")?.includes("json") ? await resp.json() : null;
   if (!resp.ok) {
     const d = data && data.detail;
+    if (!d && [502, 503, 504].includes(resp.status)) throw new Error("сервер перезапускается — попробуйте через минуту");
     throw new Error(Array.isArray(d) ? d.map((x) => x.msg).join("; ") : (d || "ошибка " + resp.status));
   }
   return data;

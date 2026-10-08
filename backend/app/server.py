@@ -229,6 +229,16 @@ def create_app(var_dir=None, database_url=None):
     app.add_middleware(GZipMiddleware, minimum_size=2000)  # поток событий (SSE) не сжимается
     app.state.pricer = {"state": state, "engine_for": engine_for, "Session": Session, "box": box}  # для тестов
 
+    from sqlalchemy.exc import DBAPIError
+
+    @app.exception_handler(DBAPIError)
+    async def database_down(request: Request, exc: DBAPIError):
+        # база недоступна (остановлена, перезапускается) — понятный ответ вместо «ошибка 500»
+        if exc.connection_invalidated or "connect" in str(exc.orig or exc).lower():
+            print(f"[pricer] база недоступна: {type(exc.orig or exc).__name__}")
+            return JSONResponse({"detail": "база данных недоступна — попробуйте через минуту"}, status_code=503)
+        raise exc
+
     @app.middleware("http")
     async def csrf_guard(request: Request, call_next):
         # Изменяющие запросы принимаем только со своим заголовком: чужой сайт не может его

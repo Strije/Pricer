@@ -1,7 +1,9 @@
 """Сторож Pricer: раз в 5 минут (systemd timer) проверяет, что сервис жив, и пишет в Telegram только
 при смене состояния («сломалось» / «починилось»). Раз в сутки — копия базы и ключа шифрования.
 
-Проверки: /health (сервис и база), место на диске, срок HTTPS-сертификата по PRICER_PUBLIC_URL.
+Проверки: PostgreSQL (остановлена — сторож запускает её сам и присылает причину из журнала),
+/health (сервис и база), нехватка памяти (ядро убило процесс — сообщение сразу), свободная память,
+место на диске, срок HTTPS-сертификата по PRICER_PUBLIC_URL.
 Копия: pg_dump базы + /var/lib/pricer (ключ шифрования secret.key, справочник брендов) в
 /var/backups/pricer/pricer-ГГГГММДД.tar.gz, хранится 14 последних. Без ключа копия базы бесполезна:
 пароли поставщиков в ней зашифрованы — поэтому они лежат вместе, а папка доступна только root.
@@ -24,6 +26,72 @@ STATE = "/var/lib/pricer-watchdog/state.json"
 DATA = "/var/lib/pricer"
 BACKUPS = "/var/backups/pricer"
 KEEP = 14
+
+
+def _run(args, timeout=60):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _log_reason(path):
+    """Последние ошибки из журнала PostgreSQL — без строк, где могут быть пароли."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as file:
+            lines = file.readlines()[-200:]
+    except OSError:
+        return ""
+    errors = [ln.strip() for ln in lines if any(w in ln for w in ("FATAL", "PANIC", "LOG:  database system", "No space"))
+              and "password" not in ln.lower()]
+    return " / ".join(errors[-3:])[:400]
+
+
+def check_db(events):
+    """Кластеры PostgreSQL: остановленный запускаем (pg_ctlcluster) и сообщаем, что было в журнале."""
+    listing = _run(["pg_lsclusters", "--no-header"], timeout=20)
+    if listing is None or listing.returncode != 0:
+        return None  # PostgreSQL не на этом сервере
+    for row in (line.split() for line in listing.stdout.splitlines() if line.strip()):
+        if len(row) < 4 or "online" in row[3]:
+            continue
+        version, name = row[0], row[1]
+        log = row[6] if len(row) > 6 else f"/var/log/postgresql/postgresql-{version}-{name}.log"
+        reason = _log_reason(log)
+        started = _run(["pg_ctlcluster", version, name, "start"], timeout=120)
+        again = _run(["pg_lsclusters", "--no-header", version, name], timeout=20)
+        if again is not None and "online" in again.stdout:
+            events.append(f"🔁 PostgreSQL {version} была остановлена — сторож запустил её снова."
+                          + (f"\nИз журнала: {reason}" if reason else ""))
+            continue
+        why = (started.stderr or started.stdout).strip()[:300] if started is not None else "pg_ctlcluster не запустился"
+        return f"PostgreSQL {version} остановлена и не запускается: {why}" + (f"\nИз журнала: {reason}" if reason else "")
+    return None
+
+
+def check_oom(state, events):
+    """Ядро убивало процессы из-за нехватки памяти с прошлой проверки — сообщаем сразу (это событие)."""
+    since = state.get("oom_since") or int(time.time()) - 600
+    state["oom_since"] = int(time.time())
+    out = _run(["journalctl", "-k", "--no-pager", "-q", "--since", f"@{since}"], timeout=30)
+    if out is None:
+        return
+    killed = [ln.split("Killed process", 1)[1].strip()[:120] for ln in out.stdout.splitlines() if "Killed process" in ln]
+    if killed:
+        events.append("🧠 Не хватило памяти: ядро остановило процесс " + "; ".join(killed[-3:])
+                      + ".\nСервисы перезапускаются сами; если повторяется — нужен swap или больше памяти.")
+
+
+def check_memory():
+    try:
+        with open("/proc/meminfo", encoding="ascii") as file:
+            info = {line.split(":")[0]: int(line.split()[1]) for line in file}
+    except (OSError, ValueError, IndexError):
+        return None
+    total, available = info.get("MemTotal", 0), info.get("MemAvailable", 0)
+    if total and available / total < 0.07:
+        return f"Свободной памяти мало: {available // 1024} МБ из {total // 1024} МБ"
+    return None
 
 
 def check_api():
@@ -101,8 +169,12 @@ def main():
             state = json.load(file)
     except (OSError, ValueError):
         state = {}
-    problems = {}
-    for name, check in (("api", check_api), ("disk", check_disk), ("cert", check_cert)):
+    problems, events = {}, []
+    message = check_db(events)  # раньше проверки сервиса: без базы он не отвечает
+    if message:
+        problems["db"] = message
+    check_oom(state, events)
+    for name, check in (("api", check_api), ("memory", check_memory), ("disk", check_disk), ("cert", check_cert)):
         message = check()
         if message:
             problems[name] = message
@@ -113,6 +185,8 @@ def main():
             problems["backup"] = message
         else:
             state["backup_day"] = today
+    for text in events:
+        telegram(f"Pricer: {text}")
     before = state.get("problems", {})
     for name, message in problems.items():
         if before.get(name) != message:

@@ -44,9 +44,10 @@ python tools/gen_engine.py <путь к main.py десктопа>       # пер
 ```
 
 Сервер: `deploy/setup.sh` (`install [адрес] [email]`, `update`, `create-org`, `reset-password`, `import-brands`,
-`backup`, `restore`, `status`), подробно — `deploy/README.md`. Сейчас: VPS 109.73.199.217,
+`backup`, `restore`, `status`, `doctor` — сводка для разбора сбоя), подробно — `deploy/README.md`. Сейчас: VPS 109.73.199.217,
 https://109-73-199-217.sslip.io, nginx → 127.0.0.1:8095, systemd `pricer.service`, PostgreSQL 16,
-сторож с Telegram (`pricer-watchdog.timer`), копии в `/var/backups/pricer`.
+сторож с Telegram (`pricer-watchdog.timer`: сайт, база — сам запускает упавшую, нехватка
+памяти, диск, сертификат), копии в `/var/backups/pricer`.
 
 ### Переменные окружения
 

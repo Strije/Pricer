@@ -309,3 +309,21 @@ def test_services_check_and_site_links(app_factory, monkeypatch):
     row = offer_view({"provider": "Rossko", "article": "W712/95", "purchase_price": 1}, E())
     assert row["site_url"] == "https://rossko.ru/search?text=W712/95"
     assert "site_url" not in offer_view({"provider": "Rossko", "article": "1", "purchase_price": 1}, E(), customer=True)
+
+
+def test_database_down_is_503_with_message(app_factory):
+    """База остановлена: вместо «ошибка 500» — 503 и понятный текст (а /health — 503 для сторожа)."""
+    from sqlalchemy import create_engine
+
+    make_client, _ = app_factory
+    client = register(make_client(), "dbdown@example.com", org="База упала")
+    Session = client.app.state.pricer["Session"]
+    alive = Session.kw["bind"]
+    Session.configure(bind=create_engine("postgresql+psycopg://x:y@127.0.0.1:1/none", pool_pre_ping=True))
+    try:
+        response = client.get("/api/me")
+        assert response.status_code == 503 and "база данных недоступна" in response.json()["detail"]
+        assert client.get("/health").status_code == 503
+    finally:
+        Session.configure(bind=alive)
+    assert client.get("/api/me").status_code == 200  # база вернулась — работает без перезапуска

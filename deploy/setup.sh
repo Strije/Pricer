@@ -11,6 +11,7 @@
 #   bash pricer-setup.sh update                                     # потом: свежий код из git
 #   bash pricer-setup.sh backup | restore ФАЙЛ | status
 #   bash pricer-setup.sh import-brands report.xls                  # справочник брендов ABCP (выгрузка из админки)
+#   bash pricer-setup.sh doctor                                     # что с сервером: вывод можно прислать
 #
 # Свой домен должен уже указывать на этот сервер (DNS, запись A), иначе сертификат не выпустится.
 set -euo pipefail
@@ -50,6 +51,19 @@ pick_python() {  # Python 3.11+ (на Ubuntu 22.04 по умолчанию 3.10 
             && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv >/dev/null && echo python3.11 && return
     fi
     die "нужен Python 3.11 или новее"
+}
+
+ensure_postgres() {  # база включена при загрузке, запущена и защищена от OOM-killer
+    local dropin=/etc/systemd/system/postgresql@.service.d
+    mkdir -p "$dropin"
+    # при нехватке памяти ядро пусть лучше остановит Pricer (он перезапустится сам), чем базу
+    printf '[Service]\nOOMScoreAdjust=-800\n' > "$dropin/pricer-oom.conf"
+    systemctl daemon-reload
+    systemctl enable -q postgresql 2>/dev/null || true
+    pg_lsclusters --no-header 2>/dev/null | awk '$4 !~ /online/ {print $1, $2}' | while read -r ver name; do
+        echo "   … PostgreSQL $ver $name была остановлена — запускаю"
+        pg_ctlcluster "$ver" "$name" start || bad "PostgreSQL $ver не запускается: tail -n 30 /var/log/postgresql/postgresql-$ver-$name.log"
+    done || true
 }
 
 deploy_code() {
@@ -92,6 +106,7 @@ cmd_install() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv git rsync curl nginx certbot \
         python3-certbot-nginx postgresql >/dev/null
     ok "Python для сервиса: $(pick_python), PostgreSQL, nginx, certbot"
+    ensure_postgres
 
     say "Адрес"
     local here there
@@ -166,6 +181,7 @@ cmd_install() {
 
 cmd_update() {
     say "Обновление"
+    ensure_postgres
     deploy_code
     systemctl restart pricer
     health
@@ -231,6 +247,34 @@ cmd_status() {
     echo "копии:"; ls -lh "$BACKUPS" 2>/dev/null | tail -5
 }
 
+cmd_doctor() {  # сводка для разбора сбоев; пароли из адресов вида ://user:pass@ скрываются
+    {
+        set +e  # сводка собирается целиком, даже если какой-то команды нет или grep ничего не нашёл
+        say "Pricer"
+        echo "версия: $(cat "$DIR/VERSION" 2>/dev/null)  сервис: $(systemctl is-active pricer)  с $(systemctl show -p ActiveEnterTimestamp --value pricer)"
+        echo "перезапусков сервиса: $(systemctl show -p NRestarts --value pricer)"
+        curl -sS -m 5 http://127.0.0.1:8095/health; echo
+        say "PostgreSQL"
+        pg_lsclusters 2>&1
+        pg_lsclusters --no-header 2>/dev/null | while read -r ver name _ _ _ _ log; do
+            echo "-- $log (последние ошибки)"
+            grep -E "FATAL|PANIC|ERROR|database system" "$log" 2>/dev/null | grep -vi password | tail -n 12
+        done
+        say "Память и диск"
+        free -m; swapon --show 2>/dev/null || true; [ -n "$(swapon --show 2>/dev/null)" ] || echo "swap: нет"
+        df -h / | tail -1
+        say "Нехватка памяти за 3 суток (ядро)"
+        journalctl -k --since "-3 days" --no-pager -q 2>/dev/null | grep -iE "out of memory|killed process|oom-kill" | tail -n 10 || true
+        say "Загрузки сервера"
+        journalctl --list-boots --no-pager 2>/dev/null | tail -n 4
+        say "Pricer: ошибки за сутки"
+        journalctl -u pricer --since "-1 day" --no-pager -q 2>/dev/null | grep -E "\[pricer\]|Error|error|Killed|Main process exited" | tail -n 25
+        say "Сторож"
+        cat /var/lib/pricer-watchdog/state.json 2>/dev/null; echo
+        systemctl list-timers pricer-watchdog.timer --no-pager 2>/dev/null | head -2
+    } 2>&1 | sed -E 's#(://[^:/@ ]+):[^@ ]+@#\1:***@#g'
+}
+
 case "${1:-}" in
     install) shift; cmd_install "$@" ;;
     update) cmd_update ;;
@@ -240,5 +284,6 @@ case "${1:-}" in
     backup) cmd_backup ;;
     restore) shift; cmd_restore "$@" ;;
     status) cmd_status ;;
-    *) sed -n '2,14p' "$0"; exit 2 ;;
+    doctor) cmd_doctor ;;
+    *) sed -n '2,15p' "$0"; exit 2 ;;
 esac
